@@ -19,7 +19,7 @@ Options:
 EOF
 }
 
-update-bootstrapper() {
+update_bootstrapper() {
     curl -lo https://jamisonsmith.is-a.dev/scripts/updaters/feet-updater
     chmod +x feet-updater
     sudo ./feet-updater
@@ -30,7 +30,7 @@ if [ "$1" = "--help" ]; then
     show_help
     exit 0
 elif [ "$1" = "--update" ]; then
-    update-bootstrapper
+    update_bootstrapper
 fi
 
 # Argument check
