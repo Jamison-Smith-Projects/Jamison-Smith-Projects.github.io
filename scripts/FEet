@@ -1,0 +1,18 @@
+#!/bin/sh
+
+# Usage: ./replace_lines.sh input.txt "search pattern" "replacement line"
+
+FILE="$1"
+SEARCH="$2"
+REPLACE="$3"
+TEMP_FILE="$(mktemp)"
+
+while IFS= read -r line; do
+    if printf "%s\n" "$line" | grep -qF "$SEARCH"; then
+        printf "%s\n" "$REPLACE" >> "$TEMP_FILE"
+    else
+        printf "%s\n" "$line" >> "$TEMP_FILE"
+    fi
+done < "$FILE"
+
+mv "$TEMP_FILE" "$FILE"

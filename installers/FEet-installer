@@ -1,0 +1,13 @@
+#!/bin/bash
+
+cd /home/$USER/
+mkdir .installertmp
+cd .installertmp
+
+curl -o feet-command https://jamisonsmith.is-a.dev/scripts/FEet
+
+chmod +x feet-command
+cp ./feet-command /usr/bin/feet
+
+cd ..
+rm -rf .installertmp
