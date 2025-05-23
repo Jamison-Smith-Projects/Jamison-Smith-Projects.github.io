@@ -13,4 +13,4 @@ cp ./feet-version /home/$USER/.feetversion
 cd ..
 rm -rf .installertmp
 
-echo "Installed FEet, try to run the command feet to work"
+echo "Installed FEet, try to run the command 'feet' to work"

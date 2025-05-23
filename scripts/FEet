@@ -20,9 +20,13 @@ EOF
 }
 
 update_bootstrapper() {
-    curl -lo https://jamisonsmith.is-a.dev/scripts/updaters/feet-updater
+    cd /home/$USER/
+    mkdir .feetbin
+    cd .feetbin
+    curl -lo feet-updater https://jamisonsmith.is-a.dev/scripts/updaters/feet-updater
     chmod +x feet-updater
     sudo ./feet-updater
+    rm -rf .feetbin
     exit 0
 }
 # Handle --help
