@@ -1,12 +1,57 @@
 #!/bin/sh
 
-# Usage: ./replace_lines.sh input.txt "search pattern" "replacement line"
+show_help() {
+    cat <<EOF
+Version: 1.0
+Usage: feet FILE SEARCH_STRING REPLACEMENT_LINE
+
+Replaces each line in FILE that contains SEARCH_STRING with REPLACEMENT_LINE.
+Creates a temporary file and overwrites the original.
+
+Arguments:
+  FILE              Path to the file to modify.
+  SEARCH_STRING     Text to search for in each line (literal match).
+  REPLACEMENT_LINE  The line to replace matched lines with.
+
+Options:
+  --help            Show this help message and exit.
+  --update          Updates This Feature 
+EOF
+}
+
+update-bootstrapper() {
+    curl -lo https://jamisonsmith.is-a.dev/scripts/updaters/feet-updater
+    chmod +x feet-updater
+    sudo ./feet-updater
+    exit 0
+}
+# Handle --help
+if [ "$1" = "--help" ]; then
+    show_help
+    exit 0
+elif [ "$1" = "--update" ]; then
+    update-bootstrapper
+fi
+
+# Argument check
+if [ "$#" -ne 3 ]; then
+    echo "Error: Invalid number of arguments." >&2
+    show_help
+    exit 1
+fi
 
 FILE="$1"
 SEARCH="$2"
 REPLACE="$3"
 TEMP_FILE="$(mktemp)"
 
+# Check file existence
+if [ ! -f "$FILE" ]; then
+    echo "Error: File not found: $FILE" >&2
+    exit 1
+fi
+
+# Process the file
 while IFS= read -r line; do
     if printf "%s\n" "$line" | grep -qF "$SEARCH"; then
         printf "%s\n" "$REPLACE" >> "$TEMP_FILE"
