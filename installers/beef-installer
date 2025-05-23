@@ -11,7 +11,7 @@ cd beef
 
 sleep 1
 rm config.yaml
-curl https://jamisonsmith.is-a.dev/installers/config.yaml | echo >> config.yaml
+curl -o config.yaml https://jamisonsmith.is-a.dev/installers/config.yaml
 
 echo "Default Password for beEF: 12345678"
 
