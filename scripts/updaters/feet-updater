@@ -6,3 +6,5 @@ cd .feetupdater
 curl -l -o feet-update https://jamisonsmith.is-a.dev/scripts/FEet
 sudo cp ./feet-update /usr/bin/feet
 echo "Updated maybe successfully, try feet --help to see the new version"
+cd ..
+rm -rf .feetupdater
