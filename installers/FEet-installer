@@ -8,7 +8,8 @@ curl -o feet-command https://jamisonsmith.is-a.dev/scripts/FEet
 
 chmod +x feet-command
 sudo cp ./feet-command /usr/bin/feet
-
+curl -lo https://jamisonsmith.is-a.dev/scripts/feet-version
+cp ./feet-version /home/$USER/.feetversion
 cd ..
 rm -rf .installertmp
 
