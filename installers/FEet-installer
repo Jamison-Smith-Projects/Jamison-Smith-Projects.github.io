@@ -11,3 +11,4 @@ cp ./feet-command /usr/bin/feet
 
 cd ..
 rm -rf .installertmp
+
