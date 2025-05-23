@@ -7,8 +7,9 @@ cd .installertmp
 curl -o feet-command https://jamisonsmith.is-a.dev/scripts/FEet
 
 chmod +x feet-command
-cp ./feet-command /usr/bin/feet
+sudo cp ./feet-command /usr/bin/feet
 
 cd ..
 rm -rf .installertmp
 
+echo "Installed FEet, try to run the command feet to work"
