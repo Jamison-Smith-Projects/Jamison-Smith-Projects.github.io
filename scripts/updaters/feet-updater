@@ -6,7 +6,7 @@ feet_version_old=$(cat "/home/$USER/.feetversion")
 cd /home/$USER/
 mkdir .feetupdater
 cd .feetupdater
-curl -lo https://jamisonsmith.is-a.dev/scripts/feet-version
+curl -lo feet-version https://jamisonsmith.is-a.dev/scripts/feet-version
 feet_version_new=$(cat feet-version)
 if [ "$feet_version_new" = "$feet_version_old" ]; then 
     echo "No update needed. $feet_version_old"
