@@ -10,9 +10,13 @@ curl -lo pime-version https://jamisonsmith.is-a.dev/scripts/pime-version
 pime_version_new=$(cat pime-version)
 if [ "$pime_version_new" = "$pime_version_old" ]; then 
     echo "No update needed. $pime_version_old"
+    exit 0
 fi
+rm -rf /home/$USER/.pimeversion
+cp pime-version /home/$USER/.pimeversion
 curl -lo pime-update https://jamisonsmith.is-a.dev/scripts/pime
 sudo cp ./pime-update /usr/bin/pime
 echo "Updated maybe successfully, try pime --help to see the new version"
 cd ..
 rm -rf .pimeupdater
+rm -rf .pimebin
