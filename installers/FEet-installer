@@ -4,7 +4,7 @@ cd $HOME
 mkdir .installertmp
 cd .installertmp
 
-curl -o feet-command https://jamisonsmith.is-a.dev/scripts/FEet
+curl -lso feet-command https://jamisonsmith.is-a.dev/scripts/FEet
 
 chmod +x feet-command
 sudo cp ./feet-command /usr/local/bin/feet
