@@ -19,4 +19,3 @@ sudo cp ./pime-update /usr/bin/pime
 echo "Updated maybe successfully, try pime --help to see the new version"
 cd ..
 rm -rf .pimeupdater
-rm -rf .pimebin
