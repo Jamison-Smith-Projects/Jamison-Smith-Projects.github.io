@@ -37,6 +37,7 @@ Arguments:
     install PACKAGE
     uninstall PACKAGE
     update
+    add-repo REPO-URL
 
 Options:
   --help            Show this help message and exit.
