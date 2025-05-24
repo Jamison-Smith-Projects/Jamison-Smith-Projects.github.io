@@ -120,7 +120,7 @@ uninstall_package() {
 
 
 update_bootstrapper() {
-    cd /home/$USER/
+    cd $HOME/
     mkdir .pimebin
     cd .pimebin
     curl -lo pime-updater https://jamisonsmith.is-a.dev/scripts/updaters/pime-updater

@@ -1,9 +1,9 @@
 #!/bin/bash
-feet_version_old=$(cat "/home/$USER/.feetversion")
+feet_version_old=$(cat "$HOME/.feetversion")
 
 
 
-cd /home/$USER/
+cd $HOME/
 mkdir .feetupdater
 cd .feetupdater
 curl -lo feet-version https://jamisonsmith.is-a.dev/scripts/feet-version
