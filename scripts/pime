@@ -3,6 +3,29 @@
 PACKAGE_LIST_URL="https://jamisonsmith.is-a.dev/scripts/pimerepo/packages.json"
 LOCAL_PACKAGE_LIST="$HOME/.pime/packages.json"
 
+INSTALLED_LIST="$HOME/.pime/installed.txt"
+
+mark_installed() {
+    pkg="$1"
+    grep -qxF "$pkg" "$INSTALLED_LIST" 2>/dev/null || echo "$pkg" >> "$INSTALLED_LIST"
+}
+
+mark_uninstalled() {
+    pkg="$1"
+    if [ -f "$INSTALLED_LIST" ]; then
+        grep -vxF "$pkg" "$INSTALLED_LIST" > "$INSTALLED_LIST.tmp" && mv "$INSTALLED_LIST.tmp" "$INSTALLED_LIST"
+    fi
+}
+
+list_installed() {
+    if [ ! -f "$INSTALLED_LIST" ] || [ ! -s "$INSTALLED_LIST" ]; then
+        echo "No packages installed."
+    else
+        echo "Installed packages:"
+        cat "$INSTALLED_LIST"
+    fi
+}
+
 show_help() {
     cat <<EOF
 Version: 1.0
@@ -50,6 +73,7 @@ install_package() {
         chmod +x "$tmpfile"
         sh "$tmpfile"
         rm "$tmpfile"
+        mark_installed "$pkg"
         echo "$pkg installed."
     else
         echo "Failed to download installer." >&2
@@ -58,9 +82,42 @@ install_package() {
 }
 
 uninstall_package() {
-    echo "Uninstall logic not implemented yet."
-    # Optionally store installed packages and write uninstallers
+    pkg="$1"
+    echo "Attempting to uninstall package: $pkg"
+
+    # Define common binary paths to check
+    BIN_PATHS="/usr/bin /usr/local/bin /usr/sbin /usr/local/sbin"
+
+    FOUND=0
+    for path in $BIN_PATHS; do
+        if [ -f "$path/$pkg" ]; then
+            echo "Found $pkg in $path, removing..."
+            sudo rm -f "$path/$pkg"
+            FOUND=1
+        fi
+    done
+
+    # Also check user's local bin if relevant
+    if [ -f "$HOME/.local/bin/$pkg" ]; then
+        echo "Found $pkg in ~/.local/bin, removing..."
+        rm -f "$HOME/.local/bin/$pkg"
+        FOUND=1
+    fi
+
+    # Remove version file
+    VERSION_FILE="$HOME/.pime/.${pkg}version"
+    if [ -f "$VERSION_FILE" ]; then
+        echo "Removing version file: $VERSION_FILE"
+        rm -f "$VERSION_FILE"
+    fi
+    mark_uninstalled "$pkg"
+    if [ "$FOUND" -eq 0 ]; then
+        echo "Warning: No binary for '$pkg' found in standard locations."
+    else
+        echo "Package '$pkg' uninstalled successfully."
+    fi
 }
+
 
 update_bootstrapper() {
     cd /home/$USER/
@@ -68,7 +125,7 @@ update_bootstrapper() {
     cd .pimebin
     curl -lo pime-updater https://jamisonsmith.is-a.dev/scripts/updaters/pime-updater
     chmod +x pime-updater
-    sudo ./pime-updater
+    ./pime-updater
     rm -rf .pimebin
     exit 0
 }
@@ -76,6 +133,9 @@ update_bootstrapper() {
 case "$1" in
     --help)
         show_help
+        ;;
+    list)
+        list_installed
         ;;
     update)
         update_packages
