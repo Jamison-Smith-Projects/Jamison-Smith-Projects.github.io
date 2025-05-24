@@ -6,12 +6,12 @@ feet_version_old=$(cat "$HOME/.feetversion")
 cd $HOME/
 mkdir .feetupdater
 cd .feetupdater
-curl -lo feet-version https://jamisonsmith.is-a.dev/scripts/feet-version
+curl -lso feet-version https://jamisonsmith.is-a.dev/scripts/feet-version
 feet_version_new=$(cat feet-version)
 if [ "$feet_version_new" = "$feet_version_old" ]; then 
     echo "No update needed. $feet_version_old"
 fi
-curl -lo feet-update https://jamisonsmith.is-a.dev/scripts/FEet
+curl -lso feet-update https://jamisonsmith.is-a.dev/scripts/FEet
 sudo cp ./feet-update /usr/local/bin/feet
 echo "Updated maybe successfully, try feet --help to see the new version"
 cd ..

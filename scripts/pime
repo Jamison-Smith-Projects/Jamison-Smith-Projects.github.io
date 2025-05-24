@@ -123,7 +123,7 @@ update_bootstrapper() {
     cd $HOME/
     mkdir .pimebin
     cd .pimebin
-    curl -lo pime-updater https://jamisonsmith.is-a.dev/scripts/updaters/pime-updater
+    curl -lso pime-updater https://jamisonsmith.is-a.dev/scripts/updaters/pime-updater
     chmod +x pime-updater
     ./pime-updater
     rm -rf .pimebin
