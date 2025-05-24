@@ -1,0 +1,16 @@
+#!/bin/bash
+
+cd /home/$USER/
+mkdir .installertmp
+cd .installertmp
+
+curl -o pime-command https://jamisonsmith.is-a.dev/scripts/pime
+
+chmod +x pime-command
+sudo cp ./pime-command /usr/bin/pime
+curl -lo pime-version https://jamisonsmith.is-a.dev/scripts/pime-version
+cp ./pime-version /home/$USER/.pimeversion
+cd ..
+rm -rf .installertmp
+
+echo "Installed pime, try to run the command 'pime' to work"
