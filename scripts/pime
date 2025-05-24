@@ -25,10 +25,10 @@ list_installed() {
         cat "$INSTALLED_LIST"
     fi
 }
-
+version=$(cat $HOME/.pimeversion)
 show_help() {
     cat <<EOF
-Version: 1.0
+Version: $version
 Usage: pime install/uninstall PACKAGE or pime update
 
 Arguments:
