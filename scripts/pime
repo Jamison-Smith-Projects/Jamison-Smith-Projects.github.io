@@ -2,6 +2,8 @@
 
 PACKAGE_LIST_URL="https://jamisonsmith.is-a.dev/scripts/pimerepo/packages.json"
 LOCAL_PACKAGE_LIST="$HOME/.pime/packages.json"
+REPO_LIST="$HOME/.pime/repo-list.json"
+ALL_PACKAGES="$HOME/.pime/packages.json"
 
 INSTALLED_LIST="$HOME/.pime/installed.txt"
 
@@ -44,23 +46,40 @@ EOF
 
 update_packages() {
     echo "Updating package list..."
-    mkdir -p "$(dirname "$LOCAL_PACKAGE_LIST")"
-    if curl -fsSL "$PACKAGE_LIST_URL" -o "$LOCAL_PACKAGE_LIST"; then
-        echo "Package list updated successfully."
-    else
-        echo "Failed to update package list." >&2
-        exit 1
+    mkdir -p "$(dirname "$ALL_PACKAGES")"
+    > "$ALL_PACKAGES"
+
+    if [ ! -f "$REPO_LIST" ]; then
+        echo "No repositories found. Use 'pime add-repo <URL>' to add one."
+        return
     fi
+
+    tmp_dir=$(mktemp -d)
+
+    for repo_url in $(jq -r '.[]' "$REPO_LIST"); do
+        echo "Fetching: $repo_url"
+        tmp_file="$tmp_dir/repo.json"
+        if curl -fsSL "$repo_url" -o "$tmp_file"; then
+            jq -s 'add' "$ALL_PACKAGES" "$tmp_file" > "$ALL_PACKAGES.tmp" && mv "$ALL_PACKAGES.tmp" "$ALL_PACKAGES"
+        else
+            echo "Warning: Failed to fetch $repo_url"
+        fi
+    done
+
+    rm -rf "$tmp_dir"
+    echo "Package list updated from all repositories."
 }
+
 
 install_package() {
     pkg="$1"
-    if [ ! -f "$LOCAL_PACKAGE_LIST" ]; then
+    if [ ! -f "$ALL_PACKAGES" ]; then
         echo "Package list not found. Run 'pime update' first." >&2
         exit 1
     fi
 
-    url=$(grep -o "\"$pkg\"[ ]*:[ ]*\"[^\"]*\"" "$LOCAL_PACKAGE_LIST" | sed -E "s/\"$pkg\"[ ]*:[ ]*\"(.*)\"/\1/")
+    url=$(jq -r --arg pkg "$pkg" '.[$pkg]' "$ALL_PACKAGES")
+
     
     if [ -z "$url" ]; then
         echo "Package '$pkg' not found." >&2
@@ -118,6 +137,22 @@ uninstall_package() {
     fi
 }
 
+add_repo() {
+    repo_url="$1"
+    mkdir -p "$(dirname "$REPO_LIST")"
+
+    if [ ! -f "$REPO_LIST" ]; then
+        echo "[]" > "$REPO_LIST"
+    fi
+
+    if grep -q "$repo_url" "$REPO_LIST"; then
+        echo "Repo already added."
+    else
+        tmp=$(mktemp)
+        jq ". + [\"$repo_url\"]" "$REPO_LIST" > "$tmp" && mv "$tmp" "$REPO_LIST"
+        echo "Repo added: $repo_url"
+    fi
+}
 
 update_bootstrapper() {
     cd $HOME/
@@ -134,6 +169,14 @@ case "$1" in
     --help)
         show_help
         ;;
+    add-repo)
+        if [ -z "$2" ]; then
+            echo "Error: Missing URL for add-repo." >&2
+            exit 1
+        fi
+        add_repo "$2"
+        ;;
+
     list)
         list_installed
         ;;
