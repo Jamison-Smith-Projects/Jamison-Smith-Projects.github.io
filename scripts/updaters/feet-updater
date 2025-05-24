@@ -12,7 +12,7 @@ if [ "$feet_version_new" = "$feet_version_old" ]; then
     echo "No update needed. $feet_version_old"
 fi
 curl -lo feet-update https://jamisonsmith.is-a.dev/scripts/FEet
-sudo cp ./feet-update /usr/bin/feet
+sudo cp ./feet-update /usr/local/bin/feet
 echo "Updated maybe successfully, try feet --help to see the new version"
 cd ..
 rm -rf .feetupdater

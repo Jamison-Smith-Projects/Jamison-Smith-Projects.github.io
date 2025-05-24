@@ -7,7 +7,7 @@ cd .installertmp
 curl -o pime-command https://jamisonsmith.is-a.dev/scripts/pime
 
 chmod +x pime-command
-sudo cp ./pime-command /usr/bin/pime
+sudo cp ./pime-command /usr/local/bin/pime
 curl -lo pime-version https://jamisonsmith.is-a.dev/scripts/pime-version
 cp ./pime-version $HOME/.pimeversion
 cd ..

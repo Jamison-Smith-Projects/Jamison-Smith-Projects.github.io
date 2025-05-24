@@ -1,15 +1,15 @@
 #!/bin/bash
 
-cd /home/$USER/
+cd $HOME
 mkdir .installertmp
 cd .installertmp
 
 curl -o feet-command https://jamisonsmith.is-a.dev/scripts/FEet
 
 chmod +x feet-command
-sudo cp ./feet-command /usr/bin/feet
+sudo cp ./feet-command /usr/local/bin/feet
 curl -lo feet-version https://jamisonsmith.is-a.dev/scripts/feet-version
-cp ./feet-version /home/$USER/.feetversion
+cp ./feet-version $HOME/.feetversion
 cd ..
 rm -rf .installertmp
 

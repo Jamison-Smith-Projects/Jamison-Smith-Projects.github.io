@@ -20,7 +20,7 @@ EOF
 }
 
 update_bootstrapper() {
-    cd /home/$USER/
+    cd $HOME
     mkdir .feetbin
     cd .feetbin
     curl -lo feet-updater https://jamisonsmith.is-a.dev/scripts/updaters/feet-updater
