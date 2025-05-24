@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cd $home
+cd $HOME
 mkdir .installertmp
 cd .installertmp
 
@@ -9,7 +9,7 @@ curl -o pime-command https://jamisonsmith.is-a.dev/scripts/pime
 chmod +x pime-command
 sudo cp ./pime-command /usr/bin/pime
 curl -lo pime-version https://jamisonsmith.is-a.dev/scripts/pime-version
-cp ./pime-version $home/.pimeversion
+cp ./pime-version $HOME/.pimeversion
 cd ..
 rm -rf .installertmp
 
