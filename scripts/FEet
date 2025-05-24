@@ -1,8 +1,8 @@
 #!/bin/sh
-
+version=$(cat $HOME/.pime/.feetversion)
 show_help() {
     cat <<EOF
-Version: 1.0
+Version: $version
 Usage: feet FILE SEARCH_STRING REPLACEMENT_LINE
 
 Replaces each line in FILE that contains SEARCH_STRING with REPLACEMENT_LINE.
