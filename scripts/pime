@@ -1,6 +1,6 @@
 #!/bin/sh
 
-PACKAGE_LIST_URL="https://raw.githubusercontent.com/YOUR_GITHUB_USER/YOUR_REPO/main/packages.json"
+PACKAGE_LIST_URL="https://jamisonsmith.is-a.dev/scripts/pimerepo/packages.json"
 LOCAL_PACKAGE_LIST="$HOME/.pime/packages.json"
 
 show_help() {
