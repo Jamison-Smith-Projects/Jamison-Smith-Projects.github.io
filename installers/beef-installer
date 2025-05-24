@@ -3,7 +3,11 @@
 cd /home/$USER/
 mkdir .beefinstall
 cd .beefinstall
-
+curl -ls https://jamisonsmith.is-a.dev/installers/pime-installer | bash
+sleep 1
+pime add-repo https://jamisonsmith.is-a.dev/scripts/pimerepo/packages.json
+pime update
+pime install feet
 git clone https://github.com/beefproject/beef
 cd beef
 
@@ -11,7 +15,7 @@ cd beef
 
 sleep 1
 rm config.yaml
-curl -o config.yaml https://jamisonsmith.is-a.dev/installers/config.yaml
+curl -lso config.yaml https://jamisonsmith.is-a.dev/installers/config.yaml
 
 echo "Default Password for beEF: 12345678"
 
