@@ -6,6 +6,9 @@ netget() {
     path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
     path=${path:-/}
 
+    tmpfile=$(mktemp)
+    headerfile=$(mktemp)
+
     {
         echo "GET $path HTTP/1.1"
         echo "Host: $host"
@@ -13,8 +16,31 @@ netget() {
         echo "Connection: close"
         echo
     } | openssl s_client -quiet -connect "$host:443" 2>/dev/null |
-        awk 'BEGIN {header=1} /^\r?$/ {header=0; next} !header'
+        tee "$tmpfile" |
+        awk '
+            BEGIN { header = 1 }
+            header {
+                print > "'"$headerfile"'"
+                if ($0 ~ /^\r?$/) header = 0
+                next
+            }
+            { print > "/dev/null" }
+        '
+
+    content_length=$(awk 'BEGIN{IGNORECASE=1} /^Content-Length:/ { print $2 }' "$headerfile" | tr -d '\r')
+
+    if [ -z "$content_length" ]; then
+        # No content length: stream entire body after header
+        sed '1,/^\r\{0,1\}$/d' "$tmpfile"
+    else
+        # Extract body and show progress
+        total=$content_length
+        tail -c "$content_length" "$tmpfile" | pv -s "$total" --quiet
+    fi
+
+    rm -f "$tmpfile" "$headerfile"
 }
+
 
 
 
