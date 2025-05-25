@@ -4,7 +4,7 @@ cd $HOME
 mkdir .installertmp
 cd .installertmp
 
-netget() {
+netgetintegrated() {
     url="$1"
     host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
     path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
