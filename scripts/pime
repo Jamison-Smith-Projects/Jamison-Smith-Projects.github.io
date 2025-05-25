@@ -66,7 +66,6 @@ netget() {
         awk 'BEGIN {header=1} /^\r?$/ {header=0; next} !header'
 }
 
-
 update_packages() {
     echo "Updating package list..."
     echo '{}' > "$ALL_PACKAGES"
@@ -91,13 +90,23 @@ install_package() {
         exit 1
     fi
 
-    url=$(jq -r --arg pkg "$pkg" 'try .[$pkg].INSTALLERURL // empty' "$ALL_PACKAGES")
-    author=$(jq -r --arg pkg "$pkg" 'try .[$pkg].PackageAuthor // "Unknown"' "$ALL_PACKAGES")
-
-    if [ -z "$url" ]; then
+    pkg_data=$(jq -r --arg pkg "$pkg" '.[$pkg]' "$ALL_PACKAGES")
+    if [ "$pkg_data" = "null" ]; then
         echo "Package '$pkg' not found." >&2
         exit 1
     fi
+
+    url=$(echo "$pkg_data" | jq -r '.INSTALLERURL')
+    author=$(echo "$pkg_data" | jq -r '.PackageAuthor // "Unknown"')
+    dependencies=$(echo "$pkg_data" | jq -r '.Dependencies[]?')
+    binary_name=$(echo "$pkg_data" | jq -r '.InstalledBinary')
+
+    [ "$binary_name" = "null" ] || [ -z "$binary_name" ] && binary_name="$pkg"
+
+    for dep in $dependencies; do
+        echo "Installing dependency: $dep"
+        install_package "$dep"
+    done
 
     echo "Installing $pkg from $url (by $author)"
     tmpfile=$(mktemp)
