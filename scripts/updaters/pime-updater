@@ -1,12 +1,27 @@
 #!/bin/bash
 pime_version_old=$(cat "$HOME/.pimeversion")
+netget() {
+    url="$1"
+    host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
+    path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
+    path=${path:-/}
+
+    {
+        echo "GET $path HTTP/1.1"
+        echo "Host: $host"
+        echo "User-Agent: pimenetget/1.0"
+        echo "Connection: close"
+        echo
+    } | openssl s_client -quiet -connect "$host:443" 2>/dev/null |
+        awk 'BEGIN {header=1} /^\r?$/ {header=0; next} !header'
+}
 
 
 
 cd $HOME/
 mkdir .pimeupdater
 cd .pimeupdater
-curl -lso pime-version https://jamisonsmith.is-a.dev/scripts/pime-version
+netget https://jamisonsmith.is-a.dev/scripts/pime-version > pime-version
 pime_version_new=$(cat pime-version)
 if [ "$pime_version_new" = "$pime_version_old" ]; then 
     echo "No update needed. $pime_version_old"
@@ -17,7 +32,7 @@ if [ "$pime_version_new" = "$pime_version_old" ]; then
 fi
 rm -rf $HOME/.pimeversion
 cp pime-version $HOME/.pimeversion
-curl -lso pime-update https://jamisonsmith.is-a.dev/scripts/pime
+netget https://jamisonsmith.is-a.dev/scripts/pime > pime-update
 sudo cp ./pime-update /usr/local/bin/pime
 rm -rf ./pime-version
 echo "Updated maybe successfully, try pime --help to see the new version"
