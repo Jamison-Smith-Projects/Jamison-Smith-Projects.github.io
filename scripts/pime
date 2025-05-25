@@ -79,15 +79,18 @@ install_package() {
         exit 1
     fi
 
-    url=$(jq -r --arg pkg "$pkg" '.[$pkg]' "$ALL_PACKAGES")
+    url=$(jq -r --arg pkg "$pkg" '.[$pkg].INSTALLERURL' "$ALL_PACKAGES")
+    author=$(jq -r --arg pkg "$pkg" '.[$pkg].PackageAuthor' "$ALL_PACKAGES")
+
 
     
-    if [ -z "$url" ]; then
+    if [ -z "$url" ] || [ "$url" = "null" ]; then
         echo "Package '$pkg' not found." >&2
         exit 1
     fi
 
-    echo "Installing $pkg from $url"
+    echo "Installing $pkg from $url (by $author)"
+
     tmpfile=$(mktemp)
     if curl -fsSL "$url" -o "$tmpfile"; then
         chmod +x "$tmpfile"
