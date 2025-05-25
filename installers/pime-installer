@@ -5,7 +5,6 @@ netget() {
     path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
     path=${path:-/}
 
-    # Create temp files
     tmp_response=$(mktemp)
     tmp_body=$(mktemp)
 
@@ -17,41 +16,39 @@ netget() {
         echo
     } | openssl s_client -quiet -connect "$host:443" 2>/dev/null > "$tmp_response"
 
-    # Separate headers and body
-    # Find line number where headers end
     header_end=$(grep -n -m 1 '^$' "$tmp_response" | cut -d: -f1)
-    body_start=$((header_end + 1))
+    [ -z "$header_end" ] && echo "Error: Invalid HTTP response." >&2 && rm -f "$tmp_response" "$tmp_body" && return 1
 
-    # Get content length (for progress)
     content_length=$(sed -n 's/^Content-Length: //Ip' "$tmp_response" | tr -d '\r')
+    body_start=$((header_end + 1))
+    body_offset=$(awk -v n="$header_end" 'NR <= n { bytes += length($0) + 1 } END { print bytes }' "$tmp_response")
 
-    # Output progress manually
     if [ -n "$content_length" ]; then
-        echo "Downloading ($content_length bytes):"
+        echo "Downloading ($content_length bytes):" >&2
+    else
+        echo "Downloading (unknown size):" >&2
     fi
 
-    # Write body to file with manual progress bar
-    dd if="$tmp_response" bs=1 skip=$(awk "BEGIN { print $(wc -c < "$tmp_response" | awk '{print $1}') - $(tail -c +$body_start "$tmp_response" | wc -c) }") 2>/dev/null |
+    dd if="$tmp_response" bs=1 skip="$body_offset" status=none |
     {
         count=0
         bar_size=50
-        while IFS= read -r -n1 -d '' c || [ -n "$c" ]; do
+        while IFS= read -r -n1 c; do
             printf "%s" "$c" >> "$tmp_body"
             count=$((count + 1))
             if [ $((count % 1024)) -eq 0 ] && [ -n "$content_length" ]; then
                 progress=$((count * bar_size / content_length))
                 bar=$(printf "%-${bar_size}s" "" | tr ' ' '=' | cut -c1-$progress)
-                printf "\r[%s>%*s] %d%%" "$bar" $((bar_size - progress)) "" $((count * 100 / content_length))
+                printf "\r[%s>%*s] %3d%%" "$bar" $((bar_size - progress)) "" $((count * 100 / content_length)) >&2
             fi
         done
+        echo >&2
     }
 
-    echo ""
     cat "$tmp_body"
-
-    # Cleanup
     rm -f "$tmp_response" "$tmp_body"
 }
+
 
 
 cd $HOME
