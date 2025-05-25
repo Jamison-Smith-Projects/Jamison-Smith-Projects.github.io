@@ -1,0 +1,10 @@
+{
+  "feet": {
+    "INSTALLERURL": "https://jamisonsmith.is-a.dev/installers/pime-feet-installer",
+    "PackageAuthor": "Jamison Smith"
+  },
+  "beef": {
+    "INSTALLERURL": "https://jamisonsmith.is-a.dev/installers/beef-installer",
+    "PackageAuthor": "Jamison Smith and beEF contributers"
+  }
+}
