@@ -6,52 +6,18 @@ cd .installertmp
 
 netgetintegrated() {
     url="$1"
+    host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
+    path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
+    path=${path:-/}
 
-    proto=$(echo "$url" | sed -n 's,\(.*\)://.*,/\1/,p')
-    host=$(echo "$url" | sed -n 's,.*://\([^/]*\).*,\1,p')
-    path=$(echo "$url" | sed -n 's,.*://[^/]*/\(.*\),/\1,p')
-    [ -z "$path" ] && path="/"
-    port="80"
-
-    case "$proto" in
-        https) port=443;;
-    esac
-
-    case "$host" in
-        *:*) port="${host##*:}"; host="${host%%:*}";;
-    esac
-
-    if command -v openssl >/dev/null 2>&1 && [ "$proto" = "https" ]; then
-        exec 3<>"$(mktemp)"
-        { 
-            printf "GET $path HTTP/1.0\r\nHost: $host\r\nUser-Agent: netget/1.0\r\nConnection: close\r\n\r\n"
-        } | openssl s_client -quiet -connect "$host:$port" 2>/dev/null | {
-            found=0
-            while IFS= read -r line; do
-                [ "$line" = $'\r' ] && found=1 && break
-            done
-            if [ "$found" -eq 1 ]; then
-                cat
-            fi
-        }
-    else
-        exec 3<>/dev/tcp/"$host"/"$port" || {
-            echo "Error: Cannot open connection. Your shell may not support /dev/tcp." >&2
-            exit 1
-        }
-
-        printf "GET $path HTTP/1.0\r\nHost: $host\r\nUser-Agent: netget/1.0\r\nConnection: close\r\n\r\n" >&3
-        found=0
-        while IFS= read -r line <&3; do
-            [ "$line" = $'\r' ] && found=1 && break
-        done
-        if [ "$found" -eq 1 ]; then
-            cat <&3
-        else
-            echo "Error: Failed to parse HTTP response." >&2
-            exit 1
-        fi
-    fi
+    {
+        echo "GET $path HTTP/1.1"
+        echo "Host: $host"
+        echo "User-Agent: pimenetget/1.0"
+        echo "Connection: close"
+        echo
+    } | openssl s_client -quiet -connect "$host:443" 2>/dev/null |
+        awk 'BEGIN {header=1} /^\r?$/ {header=0; next} !header'
 }
 netgetintegrated "https://jamisonsmith.is-a.dev/scripts/pime-netget" > pime-netget
 chmod +x pime-netget

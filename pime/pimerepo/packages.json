@@ -6,5 +6,9 @@
   "beef": {
     "INSTALLERURL": "https://jamisonsmith.is-a.dev/installers/beef-installer",
     "PackageAuthor": "Jamison Smith and beEF contributers"
+  },
+  "libnetget": {
+    "INSTALLERURL": "https://jamisonsmith.is-a.dev/installers/pime-netget-installer",
+    "PackageAuthor": "Jamison Smith"
   }
 }

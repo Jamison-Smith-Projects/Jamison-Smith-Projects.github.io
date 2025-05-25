@@ -4,49 +4,15 @@
 # Or:    sh netget.sh https://example.com/file.sh > file.sh
 
 url="$1"
+host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
+path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
+path=${path:-/}
 
-# Parse URL
-proto="$(echo "$url" | sed -n 's,^\(.*\)://.*,\1,p')"
-host="$(echo "$url" | sed -n 's,.*://\([^/]*\).*,\1,p')"
-path="$(echo "$url" | sed -n 's,.*://[^/]*/\(.*\),/\1,p')"
-
-# Default path if not specified
-[ -z "$path" ] && path="/"
-
-# Default port
-port="80"
-[ "$proto" = "https" ] && port="443"
-
-# Handle ports in host (e.g. example.com:8080)
-case "$host" in
-  *:*) port="${host##*:}"; host="${host%%:*}";;
-esac
-
-# Check for bash-compatible shell with /dev/tcp
-if [ ! -e /dev/tcp/"$host"/"$port" ] 2>/dev/null && ! (exec 3<>"/dev/tcp/$host/$port") 2>/dev/null; then
-  echo "Error: Your shell doesn't support /dev/tcp. Try using bash." >&2
-  exit 1
-fi
-
-# Open connection
-exec 3<>/dev/tcp/"$host"/"$port"
-
-# Send HTTP GET request
-printf "GET $path HTTP/1.0\r\nHost: $host\r\nUser-Agent: netget/1.0\r\nConnection: close\r\n\r\n" >&3
-
-# Skip HTTP headers
-found=0
-while IFS= read -r line <&3; do
-  [ "$line" = $'\r' ] && found=1 && break
-done
-
-# Output body
-if [ "$found" -eq 1 ]; then
-  cat <&3
-else
-  echo "Error: Failed to parse HTTP response" >&2
-  exit 1
-fi
-
-# Close connection
-exec 3<&-
+{
+    echo "GET $path HTTP/1.1"
+    echo "Host: $host"
+    echo "User-Agent: pimenetget/1.0"
+    echo "Connection: close"
+    echo
+} | openssl s_client -quiet -connect "$host:443" 2>/dev/null |
+    awk 'BEGIN {header=1} /^\r?$/ {header=0; next} !header'
