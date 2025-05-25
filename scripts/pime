@@ -79,30 +79,28 @@ install_package() {
         exit 1
     fi
 
-    url=$(jq -r --arg pkg "$pkg" '.[$pkg].INSTALLERURL' "$ALL_PACKAGES")
-    author=$(jq -r --arg pkg "$pkg" '.[$pkg].PackageAuthor' "$ALL_PACKAGES")
+    url=$(jq -r --arg pkg "$pkg" 'try .[$pkg].INSTALLERURL // empty' "$ALL_PACKAGES")
+    author=$(jq -r --arg pkg "$pkg" 'try .[$pkg].PackageAuthor // "Unknown"' "$ALL_PACKAGES")
 
-
-    
-    if [ -z "$url" ] || [ "$url" = "null" ]; then
-        echo "Package '$pkg' not found." >&2
+    if [ -z "$url" ]; then
+        echo "Package '$pkg' not found in available repositories." >&2
         exit 1
     fi
 
     echo "Installing $pkg from $url (by $author)"
-
     tmpfile=$(mktemp)
     if curl -fsSL "$url" -o "$tmpfile"; then
         chmod +x "$tmpfile"
         sh "$tmpfile"
         rm "$tmpfile"
         mark_installed "$pkg"
-        echo "$pkg installed."
+        echo "$pkg installed successfully."
     else
         echo "Failed to download installer." >&2
         exit 1
     fi
 }
+
 
 uninstall_package() {
     pkg="$1"
