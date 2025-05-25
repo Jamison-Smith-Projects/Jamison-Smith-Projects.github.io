@@ -1,6 +1,6 @@
 #!/bin/sh
 
-PACKAGE_LIST_URL="https://jamisonsmith.is-a.dev/scripts/pimerepo/packages.json"
+PACKAGE_LIST_URL="https://jamisonsmith.is-a.dev/pime/pimerepo/packages.json"
 LOCAL_PACKAGE_LIST="$HOME/.pime/packages.json"
 REPO_LIST="$HOME/.pime/repo-list.json"
 ALL_PACKAGES="$HOME/.pime/packages.json"
