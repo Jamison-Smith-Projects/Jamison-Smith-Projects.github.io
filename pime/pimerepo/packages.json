@@ -10,5 +10,9 @@
   "libnetget": {
     "INSTALLERURL": "https://jamisonsmith.is-a.dev/installers/pime-netget-installer",
     "PackageAuthor": "Jamison Smith"
+  },
+  "plex-media-server": {
+    "INSTALLERURL": "https://jamisonsmith.is-a.dev/installers/plex-server-installer",
+    "PackageAuthor": "Jamison Smith"
   }
 }

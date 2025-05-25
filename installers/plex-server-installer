@@ -1,0 +1,35 @@
+#!/bin/bash
+
+pimelocation=$(which pime)
+os_info=$(uname -a)
+
+netgetlocation=$(which netget-pime)
+if [ "$pimelocation" = "/usr/local/bin/pime" ]; then 
+    if [ "$netgetlocation" = "/usr/local/bin/netget-pime" ]; then 
+        echo "Netget already installed."
+    else
+        pime update
+        pime install libnetget
+    fi
+else
+    echo "Pime package manager not installed. Please install pime."
+    exit 0
+fi
+cd $HOME
+mkdir -p .pms-setup-installer
+cd .pms-setup-installer
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    netget-pime https://jamisonsmith.is-a.dev/installers/plexfiles/darwin_plex_chunk_aa > darwin_plex_chunk_aa
+    netget-pime https://jamisonsmith.is-a.dev/installers/plexfiles/darwin_plex_chunk_ab > darwin_plex_chunk_ab
+    netget-pime https://jamisonsmith.is-a.dev/installers/plexfiles/darwin_plex_chunk_ac > darwin_plex_chunk_ac
+    cat darwin_plex_chunk_* > plexserver.zip
+    unzip plexserver.zip
+    sudo mv Plex\ Media\ Server.app /Applications/
+    cd ..
+    rm -rf .pms-setup-installer
+    open "/Applications/"
+    exit 0
+elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    netget-pime https://jamisonsmith.is-a.dev/installers/plexfiles/plexmediaserver_amd64.deb > plexserver-amd64.deb
+    sudo dpkg -i plexserver-amd64.deb
+fi
