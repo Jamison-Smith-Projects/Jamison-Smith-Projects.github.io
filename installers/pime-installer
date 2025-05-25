@@ -5,8 +5,9 @@ netget() {
     path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
     path=${path:-/}
 
-    tmpfile=$(mktemp)
-    headerfile=$(mktemp)
+    # Create temp files
+    tmp_response=$(mktemp)
+    tmp_body=$(mktemp)
 
     {
         echo "GET $path HTTP/1.1"
@@ -14,31 +15,44 @@ netget() {
         echo "User-Agent: pimenetget/1.0"
         echo "Connection: close"
         echo
-    } | openssl s_client -quiet -connect "$host:443" 2>/dev/null |
-        tee "$tmpfile" |
-        awk '
-            BEGIN { header = 1 }
-            header {
-                print > "'"$headerfile"'"
-                if ($0 ~ /^\r?$/) header = 0
-                next
-            }
-            { print > "/dev/null" }
-        '
+    } | openssl s_client -quiet -connect "$host:443" 2>/dev/null > "$tmp_response"
 
-    content_length=$(awk 'BEGIN{IGNORECASE=1} /^Content-Length:/ { print $2 }' "$headerfile" | tr -d '\r')
+    # Separate headers and body
+    # Find line number where headers end
+    header_end=$(grep -n -m 1 '^$' "$tmp_response" | cut -d: -f1)
+    body_start=$((header_end + 1))
 
-    if [ -z "$content_length" ]; then
-        # No content length: stream entire body after header
-        sed '1,/^\r\{0,1\}$/d' "$tmpfile"
-    else
-        # Extract body and show progress
-        total=$content_length
-        tail -c "$content_length" "$tmpfile" | pv -s "$total" --quiet
+    # Get content length (for progress)
+    content_length=$(sed -n 's/^Content-Length: //Ip' "$tmp_response" | tr -d '\r')
+
+    # Output progress manually
+    if [ -n "$content_length" ]; then
+        echo "Downloading ($content_length bytes):"
     fi
 
-    rm -f "$tmpfile" "$headerfile"
+    # Write body to file with manual progress bar
+    dd if="$tmp_response" bs=1 skip=$(awk "BEGIN { print $(wc -c < "$tmp_response" | awk '{print $1}') - $(tail -c +$body_start "$tmp_response" | wc -c) }") 2>/dev/null |
+    {
+        count=0
+        bar_size=50
+        while IFS= read -r -n1 -d '' c || [ -n "$c" ]; do
+            printf "%s" "$c" >> "$tmp_body"
+            count=$((count + 1))
+            if [ $((count % 1024)) -eq 0 ] && [ -n "$content_length" ]; then
+                progress=$((count * bar_size / content_length))
+                bar=$(printf "%-${bar_size}s" "" | tr ' ' '=' | cut -c1-$progress)
+                printf "\r[%s>%*s] %d%%" "$bar" $((bar_size - progress)) "" $((count * 100 / content_length))
+            fi
+        done
+    }
+
+    echo ""
+    cat "$tmp_body"
+
+    # Cleanup
+    rm -f "$tmp_response" "$tmp_body"
 }
+
 
 cd $HOME
 mkdir .installertmp
