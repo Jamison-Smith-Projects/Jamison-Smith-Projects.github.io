@@ -1,70 +1,188 @@
 #!/bin/bash
-pime_version_old=$(cat "$HOME/.pimeversion")
-netget() {
-    url="$1"
-    host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
-    path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
-    path=${path:-/}
 
+# --- Configuration ---
+VERSION_FILE="$HOME/.pimeversion"
+TEMP_DIR="$HOME/.pimeupdater"
+UPDATE_URL="https://jamisonsmith.is-a.dev/scripts/pime"
+VERSION_URL="https://jamisonsmith.is-a.dev/scripts/pime-version"
+
+# --- Improved netget function ---
+netget() {
+    local url="$1"
+    local protocol host port path tmp_response tmp_body header_end content_length
+    local body_start body_offset count bar_size progress bar
+    local response_code redirect_url
+    
+    # Extract URL components
+    protocol="${url%%://*}"
+    host_port="${url#*://}"
+    host_port="${host_port%%/*}"
+    path="${url#*://$host_port}"
+    path="${path:-/}"
+    
+    host="${host_port%:*}"
+    port="${host_port##*:}"
+    
+    # Set default ports
+    if [[ "$host_port" == "$port" ]]; then
+        if [[ "$protocol" == "http" ]]; then
+            port=80
+        elif [[ "$protocol" == "https" ]]; then
+            port=443
+        else
+            echo "Error: Unsupported protocol $protocol" >&2
+            return 1
+        fi
+    fi
+    
+    # Create temp files
     tmp_response=$(mktemp)
     tmp_body=$(mktemp)
-
+    
+    # Build the HTTP request
     {
         echo "GET $path HTTP/1.1"
         echo "Host: $host"
-        echo "User-Agent: pimenetget/1.0"
+        echo "User-Agent: pime-updater/1.0"
         echo "Connection: close"
         echo
-    } | openssl s_client -quiet -connect "$host:443" 2>/dev/null > "$tmp_response"
-
+    } > "$tmp_body"
+    
+    # Make the request
+    if [[ "$protocol" == "https" ]]; then
+        openssl s_client -quiet -connect "$host:$port" -servername "$host" < "$tmp_body" 2>/dev/null > "$tmp_response"
+    else
+        # Try various netcat implementations
+        local nc_command=""
+        for cmd in nc netcat ncat; do
+            if command -v "$cmd" >/dev/null 2>&1; then
+                nc_command="$cmd"
+                break
+            fi
+        done
+        
+        if [[ -z "$nc_command" ]]; then
+            echo "Error: netcat not found (required for HTTP requests)" >&2
+            rm -f "$tmp_response" "$tmp_body"
+            return 1
+        fi
+        
+        "$nc_command" "$host" "$port" < "$tmp_body" > "$tmp_response"
+    fi
+    
+    # Check for valid response
+    if [[ ! -s "$tmp_response" ]]; then
+        echo "Error: No response from server" >&2
+        rm -f "$tmp_response" "$tmp_body"
+        return 1
+    fi
+    
+    # Check HTTP response code
+    response_code=$(head -n 1 "$tmp_response" | awk '{print $2}')
+    if [[ "$response_code" == 30[123578] ]]; then
+        redirect_url=$(grep -i '^Location:' "$tmp_response" | head -1 | sed 's/^Location:\s*//i' | tr -d '\r')
+        if [[ -n "$redirect_url" ]]; then
+            echo "Following redirect to: $redirect_url" >&2
+            rm -f "$tmp_response" "$tmp_body"
+            netget "$redirect_url"
+            return $?
+        fi
+    elif [[ "$response_code" != 2* ]]; then
+        echo "Error: HTTP $response_code" >&2
+        head -n 10 "$tmp_response" >&2
+        rm -f "$tmp_response" "$tmp_body"
+        return 1
+    fi
+    
+    # Process response
     header_end=$(grep -n -m 1 '^$' "$tmp_response" | cut -d: -f1)
-    [ -z "$header_end" ] && echo "Error: Invalid HTTP response." >&2 && rm -f "$tmp_response" "$tmp_body" && return 1
-
+    if [[ -z "$header_end" ]]; then
+        echo "Error: Invalid HTTP response." >&2
+        rm -f "$tmp_response" "$tmp_body"
+        return 1
+    fi
+    
     content_length=$(sed -n 's/^Content-Length: //Ip' "$tmp_response" | tr -d '\r')
-    body_start=$((header_end + 1))
     body_offset=$(awk -v n="$header_end" 'NR <= n { bytes += length($0) + 1 } END { print bytes }' "$tmp_response")
-
-    if [ -n "$content_length" ]; then
+    
+    if [[ -n "$content_length" ]]; then
         echo "Downloading ($content_length bytes):" >&2
     else
         echo "Downloading (unknown size):" >&2
     fi
-
-    dd if="$tmp_response" bs=1 skip="$body_offset" status=none | {
+    
+    # Stream the response body with progress bar
+    dd if="$tmp_response" bs=1 skip="$body_offset" status=none 2>/dev/null | {
         count=0
         bar_size=50
+        
         while IFS= read -r -n1 c; do
             printf "%s" "$c"
             count=$((count + 1))
-            if [ $((count % 1024)) -eq 0 ] && [ -n "$content_length" ]; then
+            if [[ $((count % 1024)) -eq 0 ]] && [[ -n "$content_length" ]]; then
                 progress=$((count * bar_size / content_length))
                 bar=$(printf "%-${bar_size}s" "" | tr ' ' '=' | cut -c1-$progress)
                 printf "\r[%s>%*s] %3d%%" "$bar" $((bar_size - progress)) "" $((count * 100 / content_length)) >&2
             fi
         done
-        echo >&2
+        
+        # Final progress update
+        if [[ -n "$content_length" ]]; then
+            printf "\r[%s] %3d%%\n" "$(printf "%-${bar_size}s" "" | tr ' ' '=')" 100 >&2
+        else
+            printf "\nDownload complete (%d bytes)\n" "$count" >&2
+        fi
     }
-
+    
+    # Clean up
     rm -f "$tmp_response" "$tmp_body"
 }
 
-cd $HOME/
-mkdir .pimeupdater
-cd .pimeupdater
-netget https://jamisonsmith.is-a.dev/scripts/pime-version > pime-version
+# --- Main update process ---
+
+# Get current version
+pime_version_old=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
+
+# Create temporary directory
+mkdir -p "$TEMP_DIR" || { echo "Error: Could not create temp directory"; exit 1; }
+cd "$TEMP_DIR" || exit
+
+# Get latest version
+echo "Checking for updates..."
+netget "$VERSION_URL" > pime-version || { echo "Error: Failed to check version"; cleanup; exit 1; }
 pime_version_new=$(cat pime-version)
+
+# Version comparison
 if [ "$pime_version_new" = "$pime_version_old" ]; then 
-    echo "No update needed. $pime_version_old"
-    rm -rf ./pime-version
-    cd ..
-    rm -rf .pimeupdater
+    echo "Already up to date (version $pime_version_old)"
+    cleanup
     exit 0
 fi
-rm -rf $HOME/.pimeversion
-cp pime-version $HOME/.pimeversion
-netget https://jamisonsmith.is-a.dev/scripts/pime > pime-update
-sudo cp ./pime-update /usr/local/bin/pime
-rm -rf ./pime-version
-echo "Updated maybe successfully, try pime --help to see the new version"
-cd ..
-rm -rf .pimeupdater
+
+# Download new version
+echo "Updating from $pime_version_old to $pime_version_new"
+echo "Downloading new version..."
+netget "$UPDATE_URL" > pime-update || { echo "Error: Failed to download update"; cleanup; exit 1; }
+
+# Install new version
+chmod +x pime-update
+if ! sudo mv pime-update /usr/local/bin/pime; then
+    echo "Error: Failed to install update - try running with sudo?"
+    cleanup
+    exit 1
+fi
+
+# Update version file
+echo "$pime_version_new" > "$VERSION_FILE"
+
+# Cleanup function
+cleanup() {
+    cd "$HOME" || return
+    rm -rf "$TEMP_DIR"
+}
+
+# Final cleanup and message
+cleanup
+echo "Successfully updated to version $pime_version_new"
+echo "Run 'pime --help' to verify the new version"
+exit 0

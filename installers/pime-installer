@@ -1,66 +1,183 @@
 #!/bin/bash
-netget() {
-    url="$1"
-    host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
-    path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
-    path=${path:-/}
 
+# --- Configuration ---
+INSTALL_DIR="/usr/local/bin"
+VERSION_FILE="$HOME/.pimeversion"
+TEMP_DIR="$HOME/.installertmp"
+PIME_URL="https://jamisonsmith.is-a.dev/scripts/pime"
+VERSION_URL="https://jamisonsmith.is-a.dev/scripts/pime-version"
+
+# --- Improved netget function ---
+netget() {
+    local url="$1"
+    local protocol host port path tmp_response tmp_body header_end content_length
+    local body_start body_offset count bar_size progress bar
+    local response_code redirect_url
+    
+    # Extract URL components
+    protocol="${url%%://*}"
+    host_port="${url#*://}"
+    host_port="${host_port%%/*}"
+    path="${url#*://$host_port}"
+    path="${path:-/}"
+    
+    host="${host_port%:*}"
+    port="${host_port##*:}"
+    
+    # Set default ports
+    if [[ "$host_port" == "$port" ]]; then
+        if [[ "$protocol" == "http" ]]; then
+            port=80
+        elif [[ "$protocol" == "https" ]]; then
+            port=443
+        else
+            echo "Error: Unsupported protocol $protocol" >&2
+            return 1
+        fi
+    fi
+    
+    # Create temp files
     tmp_response=$(mktemp)
     tmp_body=$(mktemp)
-
+    
+    # Build the HTTP request
     {
         echo "GET $path HTTP/1.1"
         echo "Host: $host"
-        echo "User-Agent: pimenetget/1.0"
+        echo "User-Agent: pime-installer/1.0"
         echo "Connection: close"
         echo
-    } | openssl s_client -quiet -connect "$host:443" 2>/dev/null > "$tmp_response"
-
+    } > "$tmp_body"
+    
+    # Make the request
+    if [[ "$protocol" == "https" ]]; then
+        openssl s_client -quiet -connect "$host:$port" -servername "$host" < "$tmp_body" 2>/dev/null > "$tmp_response"
+    else
+        # Try various netcat implementations
+        local nc_command=""
+        for cmd in nc netcat ncat; do
+            if command -v "$cmd" >/dev/null 2>&1; then
+                nc_command="$cmd"
+                break
+            fi
+        done
+        
+        if [[ -z "$nc_command" ]]; then
+            echo "Error: netcat not found (required for HTTP requests)" >&2
+            rm -f "$tmp_response" "$tmp_body"
+            return 1
+        fi
+        
+        "$nc_command" "$host" "$port" < "$tmp_body" > "$tmp_response"
+    fi
+    
+    # Check for valid response
+    if [[ ! -s "$tmp_response" ]]; then
+        echo "Error: No response from server" >&2
+        rm -f "$tmp_response" "$tmp_body"
+        return 1
+    fi
+    
+    # Check HTTP response code
+    response_code=$(head -n 1 "$tmp_response" | awk '{print $2}')
+    if [[ "$response_code" == 30[123578] ]]; then
+        redirect_url=$(grep -i '^Location:' "$tmp_response" | head -1 | sed 's/^Location:\s*//i' | tr -d '\r')
+        if [[ -n "$redirect_url" ]]; then
+            echo "Following redirect to: $redirect_url" >&2
+            rm -f "$tmp_response" "$tmp_body"
+            netget "$redirect_url"
+            return $?
+        fi
+    elif [[ "$response_code" != 2* ]]; then
+        echo "Error: HTTP $response_code" >&2
+        head -n 10 "$tmp_response" >&2
+        rm -f "$tmp_response" "$tmp_body"
+        return 1
+    fi
+    
+    # Process response
     header_end=$(grep -n -m 1 '^$' "$tmp_response" | cut -d: -f1)
-    [ -z "$header_end" ] && echo "Error: Invalid HTTP response." >&2 && rm -f "$tmp_response" "$tmp_body" && return 1
-
+    if [[ -z "$header_end" ]]; then
+        echo "Error: Invalid HTTP response." >&2
+        rm -f "$tmp_response" "$tmp_body"
+        return 1
+    fi
+    
     content_length=$(sed -n 's/^Content-Length: //Ip' "$tmp_response" | tr -d '\r')
-    body_start=$((header_end + 1))
     body_offset=$(awk -v n="$header_end" 'NR <= n { bytes += length($0) + 1 } END { print bytes }' "$tmp_response")
-
-    if [ -n "$content_length" ]; then
+    
+    if [[ -n "$content_length" ]]; then
         echo "Downloading ($content_length bytes):" >&2
     else
         echo "Downloading (unknown size):" >&2
     fi
-
-    dd if="$tmp_response" bs=1 skip="$body_offset" status=none | {
+    
+    # Stream the response body with progress bar
+    dd if="$tmp_response" bs=1 skip="$body_offset" status=none 2>/dev/null | {
         count=0
         bar_size=50
+        
         while IFS= read -r -n1 c; do
             printf "%s" "$c"
             count=$((count + 1))
-            if [ $((count % 1024)) -eq 0 ] && [ -n "$content_length" ]; then
+            if [[ $((count % 1024)) -eq 0 ]] && [[ -n "$content_length" ]]; then
                 progress=$((count * bar_size / content_length))
                 bar=$(printf "%-${bar_size}s" "" | tr ' ' '=' | cut -c1-$progress)
                 printf "\r[%s>%*s] %3d%%" "$bar" $((bar_size - progress)) "" $((count * 100 / content_length)) >&2
             fi
         done
-        echo >&2
+        
+        # Final progress update
+        if [[ -n "$content_length" ]]; then
+            printf "\r[%s] %3d%%\n" "$(printf "%-${bar_size}s" "" | tr ' ' '=')" 100 >&2
+        else
+            printf "\nDownload complete (%d bytes)\n" "$count" >&2
+        fi
     }
-
+    
+    # Clean up
     rm -f "$tmp_response" "$tmp_body"
 }
 
+# --- Cleanup function ---
+cleanup() {
+    cd "$HOME" || return
+    rm -rf "$TEMP_DIR"
+}
 
+# --- Main installation process ---
 
+# Create temporary directory
+mkdir -p "$TEMP_DIR" || { echo "Error: Could not create temp directory"; exit 1; }
+cd "$TEMP_DIR" || exit
 
-cd $HOME
-mkdir .installertmp
-cd .installertmp
+# Download pime command
+echo "Downloading pime..."
+netget "$PIME_URL" > pime-command || { echo "Error: Failed to download pime"; cleanup; exit 1; }
 
-netget https://jamisonsmith.is-a.dev/scripts/pime > pime-command
+# Make executable
+chmod +x pime-command || { echo "Error: Could not make pime executable"; cleanup; exit 1; }
 
-chmod +x pime-command
-sudo cp ./pime-command /usr/local/bin/pime
-netget https://jamisonsmith.is-a.dev/scripts/pime-version > pime-version
-cp ./pime-version $HOME/.pimeversion
-cd ..
-rm -rf .installertmp
+# Install to /usr/local/bin
+if ! sudo mv pime-command "$INSTALL_DIR/pime"; then
+    echo "Error: Failed to install pime - try running with sudo?"
+    cleanup
+    exit 1
+fi
 
-echo "Installed pime, try to run the command 'pime' to work"
+# Download version file
+echo "Downloading version info..."
+netget "$VERSION_URL" > pime-version || { echo "Warning: Failed to download version info"; }
+
+# Install version file
+if [[ -f "pime-version" ]]; then
+    mv pime-version "$VERSION_FILE" || { echo "Warning: Could not install version file"; }
+fi
+
+# Final cleanup
+cleanup
+
+echo -e "\nPime installed successfully to $INSTALL_DIR/pime"
+echo "Version: $(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")"
+echo "Try running 'pime --help' to get started"
+exit 0

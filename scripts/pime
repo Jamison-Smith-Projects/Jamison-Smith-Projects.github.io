@@ -51,56 +51,135 @@ list_installed() {
 }
 
 netget() {
-    url="$1"
-    host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
-    path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
-    path=${path:-/}
-
+    local url="$1"
+    local protocol host port path tmp_response tmp_body header_end content_length
+    local body_start body_offset count bar_size progress bar
+    local response_code redirect_url
+    
+    # Extract URL components
+    protocol="${url%%://*}"
+    host_port="${url#*://}"
+    host_port="${host_port%%/*}"
+    path="${url#*://$host_port}"
+    path="${path:-/}"
+    
+    host="${host_port%:*}"
+    port="${host_port##*:}"
+    
+    # Set default ports
+    if [[ "$host_port" == "$port" ]]; then
+        if [[ "$protocol" == "http" ]]; then
+            port=80
+        elif [[ "$protocol" == "https" ]]; then
+            port=443
+        else
+            echo "Error: Unsupported protocol $protocol" >&2
+            return 1
+        fi
+    fi
+    
+    # Create temp files
     tmp_response=$(mktemp)
     tmp_body=$(mktemp)
-
+    
+    # Build the HTTP request
     {
         echo "GET $path HTTP/1.1"
         echo "Host: $host"
         echo "User-Agent: pimenetget/1.0"
         echo "Connection: close"
         echo
-    } | openssl s_client -quiet -connect "$host:443" 2>/dev/null > "$tmp_response"
-
+    } > "$tmp_body"
+    
+    # Make the request
+    if [[ "$protocol" == "https" ]]; then
+        openssl s_client -quiet -connect "$host:$port" -servername "$host" < "$tmp_body" 2>/dev/null > "$tmp_response"
+    else
+        # Try various netcat implementations
+        local nc_command=""
+        for cmd in nc netcat ncat; do
+            if command -v "$cmd" >/dev/null 2>&1; then
+                nc_command="$cmd"
+                break
+            fi
+        done
+        
+        if [[ -z "$nc_command" ]]; then
+            echo "Error: netcat not found (required for HTTP requests)" >&2
+            rm -f "$tmp_response" "$tmp_body"
+            return 1
+        fi
+        
+        "$nc_command" "$host" "$port" < "$tmp_body" > "$tmp_response"
+    fi
+    
+    # Check for valid response
+    if [[ ! -s "$tmp_response" ]]; then
+        echo "Error: No response from server" >&2
+        rm -f "$tmp_response" "$tmp_body"
+        return 1
+    fi
+    
+    # Check HTTP response code
+    response_code=$(head -n 1 "$tmp_response" | awk '{print $2}')
+    if [[ "$response_code" == 30[123578] ]]; then
+        redirect_url=$(grep -i '^Location:' "$tmp_response" | head -1 | sed 's/^Location:\s*//i' | tr -d '\r')
+        if [[ -n "$redirect_url" ]]; then
+            echo "Following redirect to: $redirect_url" >&2
+            rm -f "$tmp_response" "$tmp_body"
+            netget "$redirect_url"
+            return $?
+        fi
+    elif [[ "$response_code" != 2* ]]; then
+        echo "Error: HTTP $response_code" >&2
+        head -n 10 "$tmp_response" >&2
+        rm -f "$tmp_response" "$tmp_body"
+        return 1
+    fi
+    
+    # Process response
     header_end=$(grep -n -m 1 '^$' "$tmp_response" | cut -d: -f1)
-    [ -z "$header_end" ] && echo "Error: Invalid HTTP response." >&2 && rm -f "$tmp_response" "$tmp_body" && return 1
-
+    if [[ -z "$header_end" ]]; then
+        echo "Error: Invalid HTTP response." >&2
+        rm -f "$tmp_response" "$tmp_body"
+        return 1
+    fi
+    
     content_length=$(sed -n 's/^Content-Length: //Ip' "$tmp_response" | tr -d '\r')
-    body_start=$((header_end + 1))
     body_offset=$(awk -v n="$header_end" 'NR <= n { bytes += length($0) + 1 } END { print bytes }' "$tmp_response")
-
-    if [ -n "$content_length" ]; then
+    
+    if [[ -n "$content_length" ]]; then
         echo "Downloading ($content_length bytes):" >&2
     else
         echo "Downloading (unknown size):" >&2
     fi
-
-    dd if="$tmp_response" bs=1 skip="$body_offset" status=none | {
+    
+    # Stream the response body with progress bar
+    dd if="$tmp_response" bs=1 skip="$body_offset" status=none 2>/dev/null | {
         count=0
         bar_size=50
+        
         while IFS= read -r -n1 c; do
             printf "%s" "$c"
             count=$((count + 1))
-            if [ $((count % 1024)) -eq 0 ] && [ -n "$content_length" ]; then
+            if [[ $((count % 1024)) -eq 0 ]] && [[ -n "$content_length" ]]; then
                 progress=$((count * bar_size / content_length))
                 bar=$(printf "%-${bar_size}s" "" | tr ' ' '=' | cut -c1-$progress)
                 printf "\r[%s>%*s] %3d%%" "$bar" $((bar_size - progress)) "" $((count * 100 / content_length)) >&2
             fi
         done
-        echo >&2
+        
+        # Final progress update
+        if [[ -n "$content_length" ]]; then
+            printf "\r[%s] %3d%%\n" "$(printf "%-${bar_size}s" "" | tr ' ' '=')" 100 >&2
+        else
+            printf "\nDownload complete (%d bytes)\n" "$count" >&2
+        fi
     }
-
+    
+    # Clean up
     rm -f "$tmp_response" "$tmp_body"
 }
-
-
-
-
 
 update_packages() {
     echo "Updating package list..."
@@ -146,7 +225,7 @@ install_package() {
 
     echo "Installing $pkg from $url (by $author)"
     tmpfile=$(mktemp)
-   netget "$url" > "$tmpfile" || { echo "Failed to download installer."; rm -f "$tmpfile"; exit 1; }
+    netget "$url" > "$tmpfile" || { echo "Failed to download installer."; rm -f "$tmpfile"; exit 1; }
     chmod +x "$tmpfile"
     sh "$tmpfile"
     rm "$tmpfile"
@@ -199,9 +278,9 @@ add_repo() {
 }
 
 update_bootstrapper() {
-    cd "$HOME"
+    cd "$HOME" || exit
     mkdir -p .pimebin
-    cd .pimebin
+    cd .pimebin || exit
     netget https://jamisonsmith.is-a.dev/scripts/updaters/pime-updater > pime-updater
     chmod +x pime-updater
     ./pime-updater

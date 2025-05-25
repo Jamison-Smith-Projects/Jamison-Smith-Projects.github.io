@@ -1,56 +1,319 @@
 #!/bin/bash
 
-url="$1"
-host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
-path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
-path=${path:-/}
+# Name: osslfetch
+# Description: A curl-like implementation using OpenSSL and standard Unix tools
+# Supports: HTTP/HTTPS, GET/POST, headers, basic auth, file downloads
+# Limitations: No cookies, no compression, no advanced auth methods
 
-tmp_response=$(mktemp)
-tmp_body=$(mktemp)
+# Initialize variables
+METHOD="GET"
+HEADERS=()
+DATA=""
+OUTPUT=""
+USER_AGENT="osslfetch/1.0"
+VERBOSE=0
+INSECURE=0
+FOLLOW_REDIRECTS=0
+TIMEOUT=30
+BASIC_AUTH=""
 
-{
-    echo "GET $path HTTP/1.1"
-    echo "Host: $host"
-    echo "User-Agent: netget-pime/1.0"
-    echo "Connection: close"
-    echo
-} | openssl s_client -quiet -connect "$host:443" 2>/dev/null > "$tmp_response"
+# Color codes for verbose output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
-header_end=$(grep -n -m 1 '^$' "$tmp_response" | cut -d: -f1)
-if [ -z "$header_end" ]; then
-    echo "Error: Invalid HTTP response (no headers found)." >&2
-    rm -f "$tmp_response" "$tmp_body"
+# Help message
+show_help() {
+    cat <<EOF
+Usage: $(basename "$0") [options...] <url>
+Options:
+  -X, --request METHOD   HTTP method (GET, POST, etc.)
+  -H, --header LINE      Add a header to the request
+  -d, --data DATA        Send data in the request body
+  -o, --output FILE      Write output to FILE instead of stdout
+  -u, --user USER:PASS   Server user and password for basic auth
+  -A, --user-agent STR   Send User-Agent STR to server
+  -L, --location         Follow redirects
+  -k, --insecure         Allow insecure server connections
+  -v, --verbose          Make the operation more talkative
+  -h, --help             Show this help message
+  --connect-timeout SEC  Maximum time allowed for connection (default: 30s)
+EOF
+}
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -X|--request)
+            METHOD="$2"
+            shift 2
+            ;;
+        -H|--header)
+            HEADERS+=("$2")
+            shift 2
+            ;;
+        -d|--data)
+            if [[ -f "$2" ]]; then
+                DATA=$(<"$2")
+            else
+                DATA="$2"
+            fi
+            shift 2
+            ;;
+        -o|--output)
+            OUTPUT="$2"
+            shift 2
+            ;;
+        -u|--user)
+            BASIC_AUTH="$2"
+            shift 2
+            ;;
+        -A|--user-agent)
+            USER_AGENT="$2"
+            shift 2
+            ;;
+        -L|--location)
+            FOLLOW_REDIRECTS=1
+            shift
+            ;;
+        -k|--insecure)
+            INSECURE=1
+            shift
+            ;;
+        -v|--verbose)
+            VERBOSE=$((VERBOSE + 1))
+            shift
+            ;;
+        --connect-timeout)
+            TIMEOUT="$2"
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        http*://*)
+            URL="$1"
+            shift
+            ;;
+        *)
+            echo "Error: Unknown option $1" >&2
+            show_help >&2
+            exit 1
+            ;;
+    esac
+done
+
+# Check if URL is provided
+if [[ -z "$URL" ]]; then
+    echo "Error: URL is required" >&2
+    show_help >&2
     exit 1
 fi
 
-content_length=$(sed -n 's/^Content-Length: //Ip' "$tmp_response" | tr -d '\r')
-body_start=$((header_end + 1))
+# Extract URL components
+PROTOCOL="${URL%%://*}"
+HOST_PORT="${URL#*://}"
+HOST_PORT="${HOST_PORT%%/*}"
+PATH="${URL#*://$HOST_PORT}"
+PATH="${PATH:-/}"
 
-# Calculate byte offset of body
-body_offset=$(awk -v n=$header_end 'NR <= n { bytes += length($0) + 1 } END { print bytes }' "$tmp_response")
+HOST="${HOST_PORT%:*}"
+PORT="${HOST_PORT##*:}"
 
-if [ -n "$content_length" ]; then
-    echo "Downloading ($content_length bytes):"
-else
-    echo "Downloading (unknown size):"
+# Set default ports
+if [[ "$HOST_PORT" == "$PORT" ]]; then
+    if [[ "$PROTOCOL" == "http" ]]; then
+        PORT=80
+    elif [[ "$PROTOCOL" == "https" ]]; then
+        PORT=443
+    else
+        echo "Error: Unsupported protocol $PROTOCOL" >&2
+        exit 1
+    fi
 fi
 
-dd if="$tmp_response" bs=1 skip="$body_offset" status=none |
-{
-    count=0
-    bar_size=50
-    while IFS= read -r -n1 c; do
-        printf "%s" "$c" >> "$tmp_body"
-        count=$((count + 1))
-        if [ $((count % 1024)) -eq 0 ] && [ -n "$content_length" ]; then
-            progress=$((count * bar_size / content_length))
-            bar=$(printf "%-${bar_size}s" "" | tr ' ' '=' | cut -c1-$progress)
-            printf "\r[%s>%*s] %3d%%" "$bar" $((bar_size - progress)) "" $((count * 100 / content_length))
+# Validate port
+if ! [[ "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); then
+    echo "Error: Invalid port number $PORT" >&2
+    exit 1
+fi
+
+# Prepare basic auth if provided
+if [[ -n "$BASIC_AUTH" ]]; then
+    AUTH_HEADER="Authorization: Basic $(echo -n "$BASIC_AUTH" | base64)"
+    HEADERS+=("$AUTH_HEADER")
+fi
+
+# Add default headers if not already provided
+has_header() {
+    local header_name="$1"
+    for header in "${HEADERS[@]}"; do
+        if [[ "${header%%:*}" == "$header_name" ]]; then
+            return 0
         fi
     done
-    echo
+    return 1
 }
 
-cat "$tmp_body"
+if ! has_header "User-Agent"; then
+    HEADERS+=("User-Agent: $USER_AGENT")
+fi
 
-rm -f "$tmp_response" "$tmp_body"
+if ! has_header "Host"; then
+    HEADERS+=("Host: $HOST")
+fi
+
+if ! has_header "Accept"; then
+    HEADERS+=("Accept: */*")
+fi
+
+if [[ -n "$DATA" ]] && ! has_header "Content-Type"; then
+    HEADERS+=("Content-Type: application/x-www-form-urlencoded")
+fi
+
+if [[ -n "$DATA" ]] && ! has_header "Content-Length"; then
+    CONTENT_LENGTH=${#DATA}
+    HEADERS+=("Content-Length: $CONTENT_LENGTH")
+fi
+
+# Build the HTTP request
+REQUEST="$METHOD $PATH HTTP/1.1\r\n"
+for header in "${HEADERS[@]}"; do
+    REQUEST+="$header\r\n"
+done
+REQUEST+="Connection: close\r\n\r\n"
+
+if [[ -n "$DATA" ]]; then
+    REQUEST+="$DATA"
+fi
+
+# Verbose output
+if (( VERBOSE > 0 )); then
+    echo -e "${YELLOW}* Protocol: $PROTOCOL${NC}"
+    echo -e "${YELLOW}* Host: $HOST${NC}"
+    echo -e "${YELLOW}* Port: $PORT${NC}"
+    echo -e "${YELLOW}* Path: $PATH${NC}"
+    echo -e "${YELLOW}* Method: $METHOD${NC}"
+    echo -e "${YELLOW}* Headers:${NC}"
+    for header in "${HEADERS[@]}"; do
+        echo -e "${BLUE}> $header${NC}"
+    done
+    if [[ -n "$DATA" ]]; then
+        echo -e "${YELLOW}* Data:${NC}"
+        echo -e "${BLUE}$DATA${NC}"
+    fi
+    echo -e "${GREEN}* Establishing connection...${NC}"
+fi
+
+# Function to make the HTTP request
+make_request() {
+    local host="$1"
+    local port="$2"
+    local request="$3"
+    local use_ssl=0
+    
+    if [[ "$PROTOCOL" == "https" ]]; then
+        use_ssl=1
+    fi
+    
+    # Use OpenSSL for HTTPS or netcat for HTTP
+    if (( use_ssl )); then
+        local ssl_opts=""
+        if (( INSECURE )); then
+            ssl_opts="-verify_return_error -verify_quiet"
+        else
+            ssl_opts="-verify_hostname $host"
+        fi
+        
+        {
+            echo -en "$request"
+            # Small delay to ensure we don't close the connection before receiving response
+            sleep 0.1
+        } | openssl s_client -connect "$host:$port" \
+            -servername "$host" \
+            -quiet \
+            -timeout "$TIMEOUT" \
+            $ssl_opts 2>/dev/null
+    else
+        # Try various netcat implementations
+        local nc_command=""
+        for cmd in nc netcat ncat; do
+            if command -v "$cmd" >/dev/null 2>&1; then
+                nc_command="$cmd"
+                break
+            fi
+        done
+        
+        if [[ -z "$nc_command" ]]; then
+            echo "Error: netcat not found (required for HTTP requests)" >&2
+            exit 1
+        fi
+        
+        {
+            echo -en "$request"
+            sleep 0.1
+        } | "$nc_command" -w "$TIMEOUT" "$host" "$port"
+    fi
+}
+
+# Function to handle redirects
+handle_redirect() {
+    local response="$1"
+    local location=$(echo "$response" | grep -i '^Location:' | head -1 | sed 's/^Location:\s*//i' | tr -d '\r')
+    
+    if [[ -z "$location" ]]; then
+        echo "$response"
+        return
+    fi
+    
+    # Handle relative redirects
+    if [[ "$location" != http*://* ]]; then
+        if [[ "$location" == /* ]]; then
+            location="$PROTOCOL://$HOST_PORT$location"
+        else
+            location="$PROTOCOL://$HOST_PORT$PATH/$location"
+        fi
+    fi
+    
+    if (( VERBOSE > 0 )); then
+        echo -e "${YELLOW}* Redirecting to: $location${NC}"
+    fi
+    
+    # Re-run with new URL
+    exec "$0" "$@" "$location"
+}
+
+# Main request processing
+response=$(make_request "$HOST" "$PORT" "$REQUEST")
+
+# Handle redirects if enabled
+if (( FOLLOW_REDIRECTS )) && echo "$response" | grep -qi '^HTTP/[0-9.]* [23]..'; then
+    if echo "$response" | grep -qi '^Location:'; then
+        handle_redirect "$response" "$@"
+        exit $?
+    fi
+fi
+
+# Extract and process the response
+if [[ -n "$OUTPUT" ]]; then
+    # Save to file (headers included if verbose)
+    if (( VERBOSE > 0 )); then
+        echo "$response" > "$OUTPUT"
+    else
+        # Strip headers for file output
+        echo "$response" | sed '1,/^\r$/d' > "$OUTPUT"
+    fi
+else
+    if (( VERBOSE > 0 )); then
+        # Show full response with headers
+        echo "$response"
+    else
+        # Strip headers for stdout
+        echo "$response" | sed '1,/^\r$/d'
+    fi
+fi
+
+exit 0
