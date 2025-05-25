@@ -1,8 +1,4 @@
 #!/bin/bash
-
-# Usage: sh netget.sh https://example.com/file.sh
-# Or:    sh netget.sh https://example.com/file.sh > file.sh
-
 url="$1"
 host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
 path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
@@ -15,4 +11,6 @@ path=${path:-/}
     echo "Connection: close"
     echo
 } | openssl s_client -quiet -connect "$host:443" 2>/dev/null |
-    awk 'BEGIN {header=1} /^\r?$/ {header=0; next} !header'
+    awk 'BEGIN{found=0} 
+        found{ print }
+        /^(\r)?$/ { found=1 }'
