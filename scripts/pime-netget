@@ -11,6 +11,4 @@ path=${path:-/}
     echo "Connection: close"
     echo
 } | openssl s_client -quiet -connect "$host:443" 2>/dev/null |
-    awk 'BEGIN{found=0} 
-        found{ print }
-        /^(\r)?$/ { found=1 }'
+    sed '1,/^\r\{0,1\}$/d'  # binary-safe removal of headers
