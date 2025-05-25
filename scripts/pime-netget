@@ -1,7 +1,8 @@
 #!/bin/bash
+# pime-netget v1.2 - A curl-like implementation using OpenSSL
 
 # --- Configuration ---
-VERSION="1.1"
+VERSION="1.2"
 USER_AGENT="pime-netget/$VERSION"
 DEFAULT_TIMEOUT=30
 MAX_REDIRECTS=5
@@ -11,24 +12,31 @@ show_help() {
     cat <<EOF
 pime-netget v$VERSION - A curl-like implementation using OpenSSL
 
-Usage: pime-netget [options...] <url>
-       source pime-netget (to use as library)
+Usage as command:
+  pime-netget [options...] <url>
+  pime-netget <url> | bash [bash-options...]
+
+Usage as library:
+  source pime-netget
+  netget [options] URL [output_file]
 
 Options:
   -o, --output FILE    Write output to FILE instead of stdout
   -O, --remote-name    Write output to a file named like the remote file
-  -L, --location       Follow redirects
-  -m, --max-time SEC   Maximum time allowed for the operation
+  -L, --location       Follow redirects (max $MAX_REDIRECTS)
+  -m, --max-time SEC   Maximum time allowed for the operation (default: $DEFAULT_TIMEOUT)
   -H, --header HEADER  Add a custom header to the request
   -A, --user-agent AGENT  Send User-Agent STRING to server
-  -v, --verbose        Make the operation more talkative
-  -s, --silent         Silent mode (don't show errors)
+  -v, --verbose        Show request/response headers
+  -s, --silent         Silent mode (suppress error output)
+  --insecure           Skip SSL certificate verification
   --help               Show this help message
   --version            Show version information
 
-Library usage:
-  source pime-netget
-  netget [options] URL [output_file]
+Security Note:
+  When piping to bash, always inspect scripts first:
+    pime-netget URL              # View content first
+    pime-netget URL | bash       # Then execute
 EOF
 }
 
@@ -38,6 +46,8 @@ show_version() {
 
 parse_url() {
     local url="$1"
+    [[ "$url" =~ ^https?:// ]] || url="https://$url"
+    
     local protocol="${url%%://*}"
     local rest="${url#*://}"
     local host_port="${rest%%/*}"
@@ -72,6 +82,7 @@ netget() {
     local verbose=0
     local silent=0
     local remote_name=0
+    local insecure=0
     local redirect_count=0
 
     # Parse arguments
@@ -107,6 +118,10 @@ netget() {
                 ;;
             -s|--silent)
                 silent=1
+                shift
+                ;;
+            --insecure)
+                insecure=1
                 shift
                 ;;
             --help)
@@ -146,14 +161,13 @@ netget() {
     # Handle remote name output
     if [ $remote_name -eq 1 ]; then
         output_file="${url##*/}"
-        if [ -z "$output_file" ]; then
-            output_file="index.html"
-        fi
+        [ -z "$output_file" ] && output_file="index.html"
     fi
 
     # Create temp files
     local tmp_response=$(mktemp)
     local tmp_body=$(mktemp)
+    trap 'rm -f "$tmp_response" "$tmp_body"' EXIT
 
     # Build HTTP request
     {
@@ -169,34 +183,31 @@ netget() {
 
     # Verbose output
     if [ $verbose -eq 1 ]; then
-        echo "> GET $path HTTP/1.1"
-        echo "> Host: $host"
-        echo "> User-Agent: $user_agent"
+        echo "> GET $path HTTP/1.1" >&2
+        echo "> Host: $host" >&2
+        echo "> User-Agent: $user_agent" >&2
         for header in "${headers[@]}"; do
-            echo "> $header"
+            echo "> $header" >&2
         done
-        echo ">"
+        echo ">" >&2
     fi
 
     # Make the request
+    local ssl_opts=""
+    [ $insecure -eq 1 ] && ssl_opts="-verify_quiet -verify_return_error"
+    
     local response
     if [ "$protocol" = "https" ]; then
-        response=$(openssl s_client -connect "$host:$port" -servername "$host" -quiet -timeout "$timeout" < "$tmp_body" 2>&1)
+        response=$(openssl s_client -connect "$host:$port" -servername "$host" \
+                  -quiet $ssl_opts -timeout "$timeout" < "$tmp_body" 2>&1)
     else
-        # Try different netcat implementations
         local nc_command=""
         for cmd in nc netcat ncat; do
-            if command -v "$cmd" >/dev/null 2>&1; then
-                nc_command="$cmd"
-                break
-            fi
+            command -v "$cmd" >/dev/null 2>&1 && { nc_command="$cmd"; break; }
         done
         
         if [ -z "$nc_command" ]; then
-            if [ $silent -eq 0 ]; then
-                echo "Error: netcat not found (required for HTTP)" >&2
-            fi
-            rm -f "$tmp_response" "$tmp_body"
+            [ $silent -eq 0 ] && echo "Error: netcat not found" >&2
             return 1
         fi
         
@@ -205,10 +216,7 @@ netget() {
 
     # Check for empty response
     if [ -z "$response" ]; then
-        if [ $silent -eq 0 ]; then
-            echo "Error: No response from server" >&2
-        fi
-        rm -f "$tmp_response" "$tmp_body"
+        [ $silent -eq 0 ] && echo "Error: No response from server" >&2
         return 1
     fi
 
@@ -216,69 +224,55 @@ netget() {
     echo "$response" > "$tmp_response"
     local header_end=$(grep -n -m 1 '^$' "$tmp_response" | cut -d: -f1)
     if [ -z "$header_end" ]; then
-        if [ $silent -eq 0 ]; then
-            echo "Error: Invalid HTTP response" >&2
-        fi
-        rm -f "$tmp_response" "$tmp_body"
+        [ $silent -eq 0 ] && echo "Error: Invalid HTTP response" >&2
         return 1
     fi
 
-    # Extract headers and body
+    # Extract headers and status
     local response_headers=$(head -n "$header_end" "$tmp_response")
     local http_status=$(head -n 1 "$tmp_response" | awk '{print $2}')
     local body_offset=$(awk -v n="$header_end" 'NR <= n { bytes += length($0) + 1 } END { print bytes }' "$tmp_response")
 
     # Verbose output
     if [ $verbose -eq 1 ]; then
-        echo "< HTTP/1.1 $http_status"
-        echo "$response_headers" | tail -n +2
-        echo "<"
+        echo "< HTTP/1.1 $http_status" >&2
+        echo "$response_headers" | tail -n +2 >&2
+        echo "<" >&2
     fi
 
     # Handle redirects
     if [[ "$http_status" =~ 30[12378] ]] && [ $follow_redirects -eq 1 ]; then
-        local redirect_url=$(echo "$response_headers" | grep -i '^Location:' | head -1 | sed 's/^Location:\s*//i' | tr -d '\r')
+        local redirect_url=$(echo "$response_headers" | grep -i '^Location:' | head -1 | 
+                           sed 's/^Location:\s*//i' | tr -d '\r')
         if [ -n "$redirect_url" ]; then
             if [ $redirect_count -ge $MAX_REDIRECTS ]; then
-                if [ $silent -eq 0 ]; then
-                    echo "Error: Too many redirects ($MAX_REDIRECTS)" >&2
-                fi
-                rm -f "$tmp_response" "$tmp_body"
+                [ $silent -eq 0 ] && echo "Error: Too many redirects ($MAX_REDIRECTS)" >&2
                 return 1
             fi
             
-            if [ $verbose -eq 1 ]; then
-                echo "Redirecting to: $redirect_url" >&2
-            fi
+            [ $verbose -eq 1 ] && echo "Redirecting to: $redirect_url" >&2
             
             ((redirect_count++))
-            rm -f "$tmp_response" "$tmp_body"
-            netget --location --max-time "$timeout" --user-agent "$user_agent" "$redirect_url" "$output_file"
+            netget --location --max-time "$timeout" --user-agent "$user_agent" \
+                  ${insecure:+--insecure} "$redirect_url" "$output_file"
             return $?
         fi
     fi
 
     # Check for HTTP errors
     if [ "$http_status" -ge 400 ]; then
-        if [ $silent -eq 0 ]; then
-            echo "HTTP Error: $http_status" >&2
-            if [ $verbose -eq 0 ]; then
-                echo "$response_headers" >&2
-            fi
-        fi
-        rm -f "$tmp_response" "$tmp_body"
+        [ $silent -eq 0 ] && echo "HTTP Error: $http_status" >&2
+        [ $verbose -eq 0 ] && echo "$response_headers" >&2
         return 1
     fi
 
     # Output the body
     if [ -z "$output_file" ]; then
+        # For piping support, output binary data directly
         dd if="$tmp_response" bs=1 skip="$body_offset" status=none 2>/dev/null
     else
         dd if="$tmp_response" bs=1 skip="$body_offset" status=none 2>/dev/null > "$output_file"
     fi
-
-    # Cleanup
-    rm -f "$tmp_response" "$tmp_body"
 }
 
 # --- Main Execution ---

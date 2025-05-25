@@ -1,19 +1,34 @@
 #!/bin/bash
+# pime-netget installer v1.2
 
 # --- Configuration ---
 INSTALL_DIR="/usr/local/bin"
-VERSION="1.0"
+VERSION="1.2"
 REPO_URL="https://jamisonsmith.is-a.dev/scripts/pime-netget"
+TEMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TEMP_DIR"' EXIT
 
-# --- Custom netget function for installer ---
-netget() {
+# --- Check dependencies ---
+check_deps() {
+    local missing=()
+    for cmd in openssl awk grep sed; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing+=("$cmd")
+        fi
+    done
+    
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "Missing required dependencies: ${missing[*]}" >&2
+        exit 1
+    fi
+}
+
+# --- Download with netget ---
+temp_netget() {
     url="$1"
     host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
     path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
     path=${path:-/}
-
-    tmp_response=$(mktemp)
-    tmp_body=$(mktemp)
 
     {
         echo "GET $path HTTP/1.1"
@@ -21,45 +36,33 @@ netget() {
         echo "User-Agent: pime-netget-installer/$VERSION"
         echo "Connection: close"
         echo
-    } | openssl s_client -quiet -connect "$host:443" 2>/dev/null > "$tmp_response"
-
-    header_end=$(grep -n -m 1 '^$' "$tmp_response" | cut -d: -f1)
-    [ -z "$header_end" ] && echo "Error: Invalid HTTP response." >&2 && rm -f "$tmp_response" "$tmp_body" && return 1
-
-    body_offset=$(awk -v n="$header_end" 'NR <= n { bytes += length($0) + 1 } END { print bytes }' "$tmp_response")
-    dd if="$tmp_response" bs=1 skip="$body_offset" status=none 2>/dev/null
-    
-    rm -f "$tmp_response" "$tmp_body"
+    } | openssl s_client -quiet -connect "$host:443" 2>/dev/null | \
+      awk 'NR==1{if($2 >= 400) exit 1;}/^\r$/{body=1;next}body'
 }
 
-# --- Main Installation Process ---
+# --- Main Installation ---
+check_deps
+
 echo "Installing pime-netget v$VERSION..."
+echo "Downloading from $REPO_URL..."
 
-# Create temp directory
-TEMP_DIR=$(mktemp -d)
-cd "$TEMP_DIR" || { echo "Failed to create temp directory"; exit 1; }
-
-# Download the library
-echo "Downloading pime-netget..."
-netget "$REPO_URL" > pime-netget || { echo "Download failed"; rm -rf "$TEMP_DIR"; exit 1; }
-
-# Verify the download
-if [ ! -s "pime-netget" ]; then
-    echo "Error: Downloaded file is empty"
-    rm -rf "$TEMP_DIR"
+if ! temp_netget "$REPO_URL" > "$TEMP_DIR/pime-netget"; then
+    echo "Download failed!" >&2
     exit 1
 fi
 
-# Install the library
-chmod +x pime-netget
-if ! sudo mv pime-netget "$INSTALL_DIR/"; then
-    echo "Error: Failed to install - try running with sudo?"
-    rm -rf "$TEMP_DIR"
+if [ ! -s "$TEMP_DIR/pime-netget" ]; then
+    echo "Downloaded file is empty!" >&2
     exit 1
 fi
 
-# Cleanup
-rm -rf "$TEMP_DIR"
-echo "Successfully installed pime-netget to $INSTALL_DIR"
-echo "You can now use 'pime-netget URL' to download files"
+chmod +x "$TEMP_DIR/pime-netget"
+
+if ! sudo mv "$TEMP_DIR/pime-netget" "$INSTALL_DIR/"; then
+    echo "Installation failed - try running with sudo?" >&2
+    exit 1
+fi
+
+echo "Successfully installed to $INSTALL_DIR/pime-netget"
+echo "Run 'pime-netget --help' for usage information"
 exit 0

@@ -1,58 +1,35 @@
 #!/bin/bash
+# pime-updater v1.2
 
 VERSION_FILE="$HOME/.pimeversion"
-CURRENT_VERSION=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
 UPDATE_URL="https://jamisonsmith.is-a.dev/scripts/pime"
 VERSION_URL="https://jamisonsmith.is-a.dev/scripts/pime-version"
 
-netget() {
-    url="$1"
-    host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
-    path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
-    path=${path:-/}
+# Use pime-netget if available, otherwise fallback
+if command -v pime-netget >/dev/null 2>&1; then
+    netget() { pime-netget "$@"; }
+else
+    # Fallback netget implementation
+    netget() {
+        url="$1"
+        host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
+        path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
+        path=${path:-/}
 
-    tmp_response=$(mktemp)
-    tmp_body=$(mktemp)
-
-    {
-        echo "GET $path HTTP/1.1"
-        echo "Host: $host"
-        echo "User-Agent: pimenetget/1.0"
-        echo "Connection: close"
-        echo
-    } | openssl s_client -quiet -connect "$host:443" 2>/dev/null > "$tmp_response"
-
-    header_end=$(grep -n -m 1 '^$' "$tmp_response" | cut -d: -f1)
-    [ -z "$header_end" ] && echo "Error: Invalid HTTP response." >&2 && rm -f "$tmp_response" "$tmp_body" && return 1
-
-    content_length=$(sed -n 's/^Content-Length: //Ip' "$tmp_response" | tr -d '\r')
-    body_offset=$(awk -v n="$header_end" 'NR <= n { bytes += length($0) + 1 } END { print bytes }' "$tmp_response")
-
-    if [ -n "$content_length" ]; then
-        echo "Downloading ($content_length bytes):" >&2
-    else
-        echo "Downloading (unknown size):" >&2
-    fi
-
-    dd if="$tmp_response" bs=1 skip="$body_offset" status=none | {
-        count=0
-        bar_size=50
-        while IFS= read -r -n1 c; do
-            printf "%s" "$c"
-            count=$((count + 1))
-            if [ $((count % 1024)) -eq 0 ] && [ -n "$content_length" ]; then
-                progress=$((count * bar_size / content_length))
-                bar=$(printf "%-${bar_size}s" "" | tr ' ' '=' | cut -c1-$progress)
-                printf "\r[%s>%*s] %3d%%" "$bar" $((bar_size - progress)) "" $((count * 100 / content_length)) >&2
-            fi
-        done
-        echo >&2
+        {
+            echo "GET $path HTTP/1.1"
+            echo "Host: $host"
+            echo "User-Agent: pime-updater/1.2"
+            echo "Connection: close"
+            echo
+        } | openssl s_client -quiet -connect "$host:443" 2>/dev/null | \
+          awk 'NR==1{if($2 >= 400) exit 1;}/^\r$/{body=1;next}body'
     }
+fi
 
-    rm -f "$tmp_response" "$tmp_body"
-}
-
+# --- Main Update Process ---
 echo "Checking for updates..."
+CURRENT_VERSION=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
 NEW_VERSION=$(netget "$VERSION_URL" || { echo "Failed to check version"; exit 1; })
 
 if [ "$NEW_VERSION" = "$CURRENT_VERSION" ]; then
@@ -62,17 +39,21 @@ fi
 
 echo "Updating from $CURRENT_VERSION to $NEW_VERSION"
 echo "Downloading new version..."
-tmpfile=$(mktemp)
-netget "$UPDATE_URL" > "$tmpfile" || { echo "Failed to download update"; rm -f "$tmpfile"; exit 1; }
 
-chmod +x "$tmpfile"
-if ! sudo mv "$tmpfile" /usr/local/bin/pime; then
-    echo "Error: Failed to install update - try running with sudo?"
-    rm -f "$tmpfile"
+TEMP_FILE=$(mktemp)
+if ! netget "$UPDATE_URL" > "$TEMP_FILE"; then
+    echo "Download failed!" >&2
+    rm -f "$TEMP_FILE"
+    exit 1
+fi
+
+chmod +x "$TEMP_FILE"
+if ! sudo mv "$TEMP_FILE" "/usr/local/bin/pime"; then
+    echo "Installation failed - try running with sudo?" >&2
+    rm -f "$TEMP_FILE"
     exit 1
 fi
 
 echo "$NEW_VERSION" > "$VERSION_FILE"
 echo "Successfully updated to version $NEW_VERSION"
-echo "Run 'pime --help' to verify the new version"
 exit 0
