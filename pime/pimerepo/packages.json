@@ -1,18 +1,23 @@
 {
   "feet": {
     "INSTALLERURL": "https://jamisonsmith.is-a.dev/installers/pime-feet-installer",
-    "PackageAuthor": "Jamison Smith"
+    "PackageAuthor": "Jamison Smith",
+    "Dependencies": []
   },
   "beef": {
     "INSTALLERURL": "https://jamisonsmith.is-a.dev/installers/beef-installer",
-    "PackageAuthor": "Jamison Smith and beEF contributers"
+    "PackageAuthor": "Jamison Smith and beEF contributers",
+    "Dependencies": []
   },
   "libnetget": {
     "INSTALLERURL": "https://jamisonsmith.is-a.dev/installers/pime-netget-installer",
-    "PackageAuthor": "Jamison Smith"
+    "PackageAuthor": "Jamison Smith",
+    "Dependencies": [],
+    "InstalledBinary": "netget-pime"
   },
   "plex-media-server": {
     "INSTALLERURL": "https://jamisonsmith.is-a.dev/installers/plex-server-installer",
-    "PackageAuthor": "Jamison Smith"
+    "PackageAuthor": "Jamison Smith",
+    "Dependencies": []
   }
 }
