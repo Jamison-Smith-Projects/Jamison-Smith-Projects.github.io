@@ -163,6 +163,8 @@ update_bootstrapper() {
     curl -lso pime-updater https://jamisonsmith.is-a.dev/scripts/updaters/pime-updater
     chmod +x pime-updater
     ./pime-updater
+    rm -rf ./pime-updater
+    cd ..
     rm -rf .pimebin
     exit 0
 }
