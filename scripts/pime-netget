@@ -1,244 +1,61 @@
 #!/bin/bash
 
-# Name: osslfetch
-# Description: A curl-like implementation using OpenSSL and standard Unix tools
-# Supports: HTTP/HTTPS, GET/POST, headers, basic auth, file downloads
-# Limitations: No cookies, no compression, no advanced auth methods
-
-# Initialize variables
-METHOD="GET"
-HEADERS=()
-DATA=""
-OUTPUT=""
-USER_AGENT="osslfetch/1.0"
-VERBOSE=0
-INSECURE=0
-FOLLOW_REDIRECTS=0
+# --- Configuration ---
+VERSION="1.0"
+USER_AGENT="pime-netget/$VERSION"
 TIMEOUT=30
-BASIC_AUTH=""
 
-# Color codes for verbose output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Help message
-show_help() {
-    cat <<EOF
-Usage: $(basename "$0") [options...] <url>
-Options:
-  -X, --request METHOD   HTTP method (GET, POST, etc.)
-  -H, --header LINE      Add a header to the request
-  -d, --data DATA        Send data in the request body
-  -o, --output FILE      Write output to FILE instead of stdout
-  -u, --user USER:PASS   Server user and password for basic auth
-  -A, --user-agent STR   Send User-Agent STR to server
-  -L, --location         Follow redirects
-  -k, --insecure         Allow insecure server connections
-  -v, --verbose          Make the operation more talkative
-  -h, --help             Show this help message
-  --connect-timeout SEC  Maximum time allowed for connection (default: 30s)
-EOF
-}
-
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -X|--request)
-            METHOD="$2"
-            shift 2
-            ;;
-        -H|--header)
-            HEADERS+=("$2")
-            shift 2
-            ;;
-        -d|--data)
-            if [[ -f "$2" ]]; then
-                DATA=$(<"$2")
-            else
-                DATA="$2"
-            fi
-            shift 2
-            ;;
-        -o|--output)
-            OUTPUT="$2"
-            shift 2
-            ;;
-        -u|--user)
-            BASIC_AUTH="$2"
-            shift 2
-            ;;
-        -A|--user-agent)
-            USER_AGENT="$2"
-            shift 2
-            ;;
-        -L|--location)
-            FOLLOW_REDIRECTS=1
-            shift
-            ;;
-        -k|--insecure)
-            INSECURE=1
-            shift
-            ;;
-        -v|--verbose)
-            VERBOSE=$((VERBOSE + 1))
-            shift
-            ;;
-        --connect-timeout)
-            TIMEOUT="$2"
-            shift 2
-            ;;
-        -h|--help)
-            show_help
-            exit 0
-            ;;
-        http*://*)
-            URL="$1"
-            shift
-            ;;
-        *)
-            echo "Error: Unknown option $1" >&2
-            show_help >&2
-            exit 1
-            ;;
-    esac
-done
-
-# Check if URL is provided
-if [[ -z "$URL" ]]; then
-    echo "Error: URL is required" >&2
-    show_help >&2
-    exit 1
-fi
-
-# Extract URL components
-PROTOCOL="${URL%%://*}"
-HOST_PORT="${URL#*://}"
-HOST_PORT="${HOST_PORT%%/*}"
-PATH="${URL#*://$HOST_PORT}"
-PATH="${PATH:-/}"
-
-HOST="${HOST_PORT%:*}"
-PORT="${HOST_PORT##*:}"
-
-# Set default ports
-if [[ "$HOST_PORT" == "$PORT" ]]; then
-    if [[ "$PROTOCOL" == "http" ]]; then
-        PORT=80
-    elif [[ "$PROTOCOL" == "https" ]]; then
-        PORT=443
-    else
-        echo "Error: Unsupported protocol $PROTOCOL" >&2
-        exit 1
+# --- Main Function ---
+netget() {
+    # Argument check
+    if [ -z "$1" ]; then
+        echo "Usage: pime-netget URL [OUTPUT_FILE]"
+        return 1
     fi
-fi
+    local url="$1"
+    local output_file="$2"
 
-# Validate port
-if ! [[ "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); then
-    echo "Error: Invalid port number $PORT" >&2
-    exit 1
-fi
+    # Parse URL components
+    local protocol="${url%%://*}"
+    local host_port="${url#*://}"
+    host_port="${host_port%%/*}"
+    local path="${url#*://$host_port}"
+    path="${path:-/}"
 
-# Prepare basic auth if provided
-if [[ -n "$BASIC_AUTH" ]]; then
-    AUTH_HEADER="Authorization: Basic $(echo -n "$BASIC_AUTH" | base64)"
-    HEADERS+=("$AUTH_HEADER")
-fi
+    local host="${host_port%:*}"
+    local port="${host_port##*:}"
 
-# Add default headers if not already provided
-has_header() {
-    local header_name="$1"
-    for header in "${HEADERS[@]}"; do
-        if [[ "${header%%:*}" == "$header_name" ]]; then
-            return 0
-        fi
-    done
-    return 1
-}
-
-if ! has_header "User-Agent"; then
-    HEADERS+=("User-Agent: $USER_AGENT")
-fi
-
-if ! has_header "Host"; then
-    HEADERS+=("Host: $HOST")
-fi
-
-if ! has_header "Accept"; then
-    HEADERS+=("Accept: */*")
-fi
-
-if [[ -n "$DATA" ]] && ! has_header "Content-Type"; then
-    HEADERS+=("Content-Type: application/x-www-form-urlencoded")
-fi
-
-if [[ -n "$DATA" ]] && ! has_header "Content-Length"; then
-    CONTENT_LENGTH=${#DATA}
-    HEADERS+=("Content-Length: $CONTENT_LENGTH")
-fi
-
-# Build the HTTP request
-REQUEST="$METHOD $PATH HTTP/1.1\r\n"
-for header in "${HEADERS[@]}"; do
-    REQUEST+="$header\r\n"
-done
-REQUEST+="Connection: close\r\n\r\n"
-
-if [[ -n "$DATA" ]]; then
-    REQUEST+="$DATA"
-fi
-
-# Verbose output
-if (( VERBOSE > 0 )); then
-    echo -e "${YELLOW}* Protocol: $PROTOCOL${NC}"
-    echo -e "${YELLOW}* Host: $HOST${NC}"
-    echo -e "${YELLOW}* Port: $PORT${NC}"
-    echo -e "${YELLOW}* Path: $PATH${NC}"
-    echo -e "${YELLOW}* Method: $METHOD${NC}"
-    echo -e "${YELLOW}* Headers:${NC}"
-    for header in "${HEADERS[@]}"; do
-        echo -e "${BLUE}> $header${NC}"
-    done
-    if [[ -n "$DATA" ]]; then
-        echo -e "${YELLOW}* Data:${NC}"
-        echo -e "${BLUE}$DATA${NC}"
-    fi
-    echo -e "${GREEN}* Establishing connection...${NC}"
-fi
-
-# Function to make the HTTP request
-make_request() {
-    local host="$1"
-    local port="$2"
-    local request="$3"
-    local use_ssl=0
-    
-    if [[ "$PROTOCOL" == "https" ]]; then
-        use_ssl=1
-    fi
-    
-    # Use OpenSSL for HTTPS or netcat for HTTP
-    if (( use_ssl )); then
-        local ssl_opts=""
-        if (( INSECURE )); then
-            ssl_opts="-verify_return_error -verify_quiet"
+    # Set default ports
+    if [ "$host_port" = "$port" ]; then
+        if [ "$protocol" = "http" ]; then
+            port=80
+        elif [ "$protocol" = "https" ]; then
+            port=443
         else
-            ssl_opts="-verify_hostname $host"
+            echo "Error: Unsupported protocol $protocol" >&2
+            return 1
         fi
-        
-        {
-            echo -en "$request"
-            # Small delay to ensure we don't close the connection before receiving response
-            sleep 0.1
-        } | openssl s_client -connect "$host:$port" \
-            -servername "$host" \
-            -quiet \
-            -timeout "$TIMEOUT" \
-            $ssl_opts 2>/dev/null
+    fi
+
+    # Create temp files
+    local tmp_response=$(mktemp)
+    local tmp_body=$(mktemp)
+
+    # Build HTTP request
+    {
+        echo "GET $path HTTP/1.1"
+        echo "Host: $host"
+        echo "User-Agent: $USER_AGENT"
+        echo "Connection: close"
+        echo
+    } > "$tmp_body"
+
+    # Make the request
+    local response
+    if [ "$protocol" = "https" ]; then
+        response=$(openssl s_client -connect "$host:$port" -servername "$host" -quiet -timeout "$TIMEOUT" < "$tmp_body" 2>/dev/null)
     else
-        # Try various netcat implementations
+        # Try different netcat implementations
         local nc_command=""
         for cmd in nc netcat ncat; do
             if command -v "$cmd" >/dev/null 2>&1; then
@@ -247,73 +64,71 @@ make_request() {
             fi
         done
         
-        if [[ -z "$nc_command" ]]; then
-            echo "Error: netcat not found (required for HTTP requests)" >&2
-            exit 1
+        if [ -z "$nc_command" ]; then
+            echo "Error: netcat not found (required for HTTP)" >&2
+            rm -f "$tmp_response" "$tmp_body"
+            return 1
         fi
         
-        {
-            echo -en "$request"
-            sleep 0.1
-        } | "$nc_command" -w "$TIMEOUT" "$host" "$port"
+        response=$("$nc_command" -w "$TIMEOUT" "$host" "$port" < "$tmp_body")
     fi
-}
 
-# Function to handle redirects
-handle_redirect() {
-    local response="$1"
-    local location=$(echo "$response" | grep -i '^Location:' | head -1 | sed 's/^Location:\s*//i' | tr -d '\r')
-    
-    if [[ -z "$location" ]]; then
-        echo "$response"
-        return
+    # Check for empty response
+    if [ -z "$response" ]; then
+        echo "Error: No response from server" >&2
+        rm -f "$tmp_response" "$tmp_body"
+        return 1
     fi
-    
-    # Handle relative redirects
-    if [[ "$location" != http*://* ]]; then
-        if [[ "$location" == /* ]]; then
-            location="$PROTOCOL://$HOST_PORT$location"
-        else
-            location="$PROTOCOL://$HOST_PORT$PATH/$location"
+
+    # Process response
+    echo "$response" > "$tmp_response"
+    local header_end=$(grep -n -m 1 '^$' "$tmp_response" | cut -d: -f1)
+    if [ -z "$header_end" ]; then
+        echo "Error: Invalid HTTP response" >&2
+        rm -f "$tmp_response" "$tmp_body"
+        return 1
+    fi
+
+    # Extract headers and body
+    local headers=$(head -n "$header_end" "$tmp_response")
+    local body_offset=$(awk -v n="$header_end" 'NR <= n { bytes += length($0) + 1 } END { print bytes }' "$tmp_response")
+
+    # Check HTTP status
+    local http_status=$(head -n 1 "$tmp_response" | awk '{print $2}')
+    if [ "$http_status" -ge 400 ]; then
+        echo "Error: HTTP $http_status" >&2
+        echo "$headers" >&2
+        rm -f "$tmp_response" "$tmp_body"
+        return 1
+    fi
+
+    # Handle redirects
+    if [[ "$http_status" =~ 30[12378] ]]; then
+        local redirect_url=$(echo "$headers" | grep -i '^Location:' | head -1 | sed 's/^Location:\s*//i' | tr -d '\r')
+        if [ -n "$redirect_url" ]; then
+            echo "Following redirect to: $redirect_url" >&2
+            rm -f "$tmp_response" "$tmp_body"
+            netget "$redirect_url" "$output_file"
+            return $?
         fi
     fi
-    
-    if (( VERBOSE > 0 )); then
-        echo -e "${YELLOW}* Redirecting to: $location${NC}"
+
+    # Output the body
+    if [ -z "$output_file" ]; then
+        dd if="$tmp_response" bs=1 skip="$body_offset" status=none 2>/dev/null
+    else
+        dd if="$tmp_response" bs=1 skip="$body_offset" status=none 2>/dev/null > "$output_file"
     fi
-    
-    # Re-run with new URL
-    exec "$0" "$@" "$location"
+
+    # Cleanup
+    rm -f "$tmp_response" "$tmp_body"
 }
 
-# Main request processing
-response=$(make_request "$HOST" "$PORT" "$REQUEST")
-
-# Handle redirects if enabled
-if (( FOLLOW_REDIRECTS )) && echo "$response" | grep -qi '^HTTP/[0-9.]* [23]..'; then
-    if echo "$response" | grep -qi '^Location:'; then
-        handle_redirect "$response" "$@"
-        exit $?
-    fi
-fi
-
-# Extract and process the response
-if [[ -n "$OUTPUT" ]]; then
-    # Save to file (headers included if verbose)
-    if (( VERBOSE > 0 )); then
-        echo "$response" > "$OUTPUT"
-    else
-        # Strip headers for file output
-        echo "$response" | sed '1,/^\r$/d' > "$OUTPUT"
-    fi
+# --- Main Execution ---
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # If run as a script
+    netget "$@"
 else
-    if (( VERBOSE > 0 )); then
-        # Show full response with headers
-        echo "$response"
-    else
-        # Strip headers for stdout
-        echo "$response" | sed '1,/^\r$/d'
-    fi
+    # If sourced as a library
+    export -f netget
 fi
-
-exit 0

@@ -1,156 +1,65 @@
 #!/bin/bash
 
-cd "$HOME" || exit
-mkdir -p .installertmp
-cd .installertmp || exit
+# --- Configuration ---
+INSTALL_DIR="/usr/local/bin"
+VERSION="1.0"
+REPO_URL="https://jamisonsmith.is-a.dev/scripts/pime-netget"
 
-netgetintegrated() {
-    local url="$1"
-    local protocol host port path tmp_response tmp_body header_end content_length
-    local body_start body_offset count bar_size progress bar
-    local response_code redirect_url
-    
-    # Extract URL components
-    protocol="${url%%://*}"
-    host_port="${url#*://}"
-    host_port="${host_port%%/*}"
-    path="${url#*://$host_port}"
-    path="${path:-/}"
-    
-    host="${host_port%:*}"
-    port="${host_port##*:}"
-    
-    # Set default ports
-    if [[ "$host_port" == "$port" ]]; then
-        if [[ "$protocol" == "http" ]]; then
-            port=80
-        elif [[ "$protocol" == "https" ]]; then
-            port=443
-        else
-            echo "Error: Unsupported protocol $protocol" >&2
-            return 1
-        fi
-    fi
-    
-    # Create temp files
+# --- Custom netget function for installer ---
+netget() {
+    url="$1"
+    host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
+    path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
+    path=${path:-/}
+
     tmp_response=$(mktemp)
     tmp_body=$(mktemp)
-    
-    # Build the HTTP request
+
     {
         echo "GET $path HTTP/1.1"
         echo "Host: $host"
-        echo "User-Agent: pimenetget/1.0"
+        echo "User-Agent: pime-netget-installer/$VERSION"
         echo "Connection: close"
         echo
-    } > "$tmp_body"
-    
-    # Make the request
-    if [[ "$protocol" == "https" ]]; then
-        openssl s_client -quiet -connect "$host:$port" -servername "$host" < "$tmp_body" 2>/dev/null > "$tmp_response"
-    else
-        # Try various netcat implementations
-        local nc_command=""
-        for cmd in nc netcat ncat; do
-            if command -v "$cmd" >/dev/null 2>&1; then
-                nc_command="$cmd"
-                break
-            fi
-        done
-        
-        if [[ -z "$nc_command" ]]; then
-            echo "Error: netcat not found (required for HTTP requests)" >&2
-            rm -f "$tmp_response" "$tmp_body"
-            return 1
-        fi
-        
-        "$nc_command" "$host" "$port" < "$tmp_body" > "$tmp_response"
-    fi
-    
-    # Check for valid response
-    if [[ ! -s "$tmp_response" ]]; then
-        echo "Error: No response from server" >&2
-        rm -f "$tmp_response" "$tmp_body"
-        return 1
-    fi
-    
-    # Check HTTP response code
-    response_code=$(head -n 1 "$tmp_response" | awk '{print $2}')
-    if [[ "$response_code" == 30[123578] ]]; then
-        redirect_url=$(grep -i '^Location:' "$tmp_response" | head -1 | sed 's/^Location:\s*//i' | tr -d '\r')
-        if [[ -n "$redirect_url" ]]; then
-            echo "Following redirect to: $redirect_url" >&2
-            rm -f "$tmp_response" "$tmp_body"
-            netgetintegrated "$redirect_url"
-            return $?
-        fi
-    elif [[ "$response_code" != 2* ]]; then
-        echo "Error: HTTP $response_code" >&2
-        head -n 10 "$tmp_response" >&2
-        rm -f "$tmp_response" "$tmp_body"
-        return 1
-    fi
-    
-    # Process response
+    } | openssl s_client -quiet -connect "$host:443" 2>/dev/null > "$tmp_response"
+
     header_end=$(grep -n -m 1 '^$' "$tmp_response" | cut -d: -f1)
-    if [[ -z "$header_end" ]]; then
-        echo "Error: Invalid HTTP response." >&2
-        rm -f "$tmp_response" "$tmp_body"
-        return 1
-    fi
-    
-    content_length=$(sed -n 's/^Content-Length: //Ip' "$tmp_response" | tr -d '\r')
+    [ -z "$header_end" ] && echo "Error: Invalid HTTP response." >&2 && rm -f "$tmp_response" "$tmp_body" && return 1
+
     body_offset=$(awk -v n="$header_end" 'NR <= n { bytes += length($0) + 1 } END { print bytes }' "$tmp_response")
+    dd if="$tmp_response" bs=1 skip="$body_offset" status=none 2>/dev/null
     
-    if [[ -n "$content_length" ]]; then
-        echo "Downloading ($content_length bytes):" >&2
-    else
-        echo "Downloading (unknown size):" >&2
-    fi
-    
-    # Stream the response body with progress bar
-    dd if="$tmp_response" bs=1 skip="$body_offset" status=none 2>/dev/null | {
-        count=0
-        bar_size=50
-        
-        while IFS= read -r -n1 c; do
-            printf "%s" "$c"
-            count=$((count + 1))
-            if [[ $((count % 1024)) -eq 0 ]] && [[ -n "$content_length" ]]; then
-                progress=$((count * bar_size / content_length))
-                bar=$(printf "%-${bar_size}s" "" | tr ' ' '=' | cut -c1-$progress)
-                printf "\r[%s>%*s] %3d%%" "$bar" $((bar_size - progress)) "" $((count * 100 / content_length)) >&2
-            fi
-        done
-        
-        # Final progress update
-        if [[ -n "$content_length" ]]; then
-            printf "\r[%s] %3d%%\n" "$(printf "%-${bar_size}s" "" | tr ' ' '=')" 100 >&2
-        else
-            printf "\nDownload complete (%d bytes)\n" "$count" >&2
-        fi
-    }
-    
-    # Clean up
     rm -f "$tmp_response" "$tmp_body"
 }
 
-# Download and install the script
-netgetintegrated "https://jamisonsmith.is-a.dev/scripts/pime-netget" > pime-netget || {
-    echo "Failed to download pime-netget" >&2
-    cd ..
-    rm -rf .installertmp
-    exit 1
-}
+# --- Main Installation Process ---
+echo "Installing pime-netget v$VERSION..."
 
+# Create temp directory
+TEMP_DIR=$(mktemp -d)
+cd "$TEMP_DIR" || { echo "Failed to create temp directory"; exit 1; }
+
+# Download the library
+echo "Downloading pime-netget..."
+netget "$REPO_URL" > pime-netget || { echo "Download failed"; rm -rf "$TEMP_DIR"; exit 1; }
+
+# Verify the download
+if [ ! -s "pime-netget" ]; then
+    echo "Error: Downloaded file is empty"
+    rm -rf "$TEMP_DIR"
+    exit 1
+fi
+
+# Install the library
 chmod +x pime-netget
-sudo mv pime-netget /usr/local/bin/netget-pime || {
-    echo "Failed to install netget-pime - try running with sudo?" >&2
-    cd ..
-    rm -rf .installertmp
+if ! sudo mv pime-netget "$INSTALL_DIR/"; then
+    echo "Error: Failed to install - try running with sudo?"
+    rm -rf "$TEMP_DIR"
     exit 1
-}
+fi
 
-cd ..
-rm -rf .installertmp
-echo "Successfully installed netget-pime to /usr/local/bin/"
+# Cleanup
+rm -rf "$TEMP_DIR"
+echo "Successfully installed pime-netget to $INSTALL_DIR"
+echo "You can now use 'pime-netget URL' to download files"
+exit 0
