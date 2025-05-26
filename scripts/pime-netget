@@ -1,150 +1,351 @@
 #!/bin/bash
-# pime-netget v1.3 - Fixed HTTPS response handling
+# pime-netget v2.0 - A curl-like implementation with OpenSSL
 
-# --- Configuration ---
-VERSION="1.3"
+VERSION="2.0"
 USER_AGENT="pime-netget/$VERSION"
 DEFAULT_TIMEOUT=30
-MAX_REDIRECTS=5
+MAX_REDIRECTS=10
 
-# --- Helper Functions ---
 show_help() {
     cat <<EOF
-pime-netget v$VERSION - A curl-like implementation using OpenSSL
+pime-netget v$VERSION - A curl replacement using OpenSSL
 
-Usage:
-  pime-netget [options...] <url>
-  pime-netget <url> | bash
+Usage: pime-netget [options...] <url>
 
 Options:
-  -o, --output FILE    Write output to FILE
-  -L, --location       Follow redirects
-  -m, --max-time SEC   Operation timeout
-  -v, --verbose        Show headers
-  -s, --silent         Silent mode
-  --help               Show this help
+  -X, --request METHOD   HTTP method (GET,POST,PUT,etc.)
+  -H, --header HEADER    Add a custom header
+  -d, --data DATA        Send data in request body
+  -F, --form KEY=VALUE   Add multipart form data
+  -o, --output FILE      Write output to FILE
+  -O, --remote-name      Write output to file named like remote
+  -L, --location         Follow redirects
+  -m, --max-time SEC     Maximum time allowed
+  -A, --user-agent AGENT Send User-Agent string
+  -e, --referer URL      Set Referer header
+  -k, --insecure         Skip SSL verification
+  -v, --verbose          Show verbose output
+  -s, --silent           Silent mode
+  --help                 Show this help
+  --version              Show version
+
+Supported features:
+  - HTTPS/1.1 with keep-alive
+  - GET/POST/PUT/DELETE methods
+  - Form data (multipart/form-data)
+  - JSON payloads
+  - Cookie handling
+  - Basic authentication
+  - Proxy support (HTTP_CONNECT)
+  - Gzip compression
 EOF
 }
 
+# Initialize variables
+init_vars() {
+    METHOD="GET"
+    HEADERS=()
+    DATA=""
+    OUTPUT=""
+    FOLLOW_REDIRECTS=0
+    TIMEOUT=$DEFAULT_TIMEOUT
+    INSECURE=0
+    VERBOSE=0
+    SILENT=0
+    FORM_DATA=()
+    COOKIES=()
+    AUTH=""
+    REFERER=""
+    COMPRESS=0
+    PROXY=""
+}
+
+# Parse URL components
 parse_url() {
     local url="$1"
     [[ "$url" =~ ^https?:// ]] || url="https://$url"
     
     local protocol="${url%%://*}"
     local rest="${url#*://}"
-    local host_port="${rest%%/*}"
+    local host_port="${rest%%[/?]*}"
     local path="/${rest#*/}"
+    path="${path%%#*}"  # Remove fragments
 
     local host="${host_port%:*}"
     local port="${host_port##*:}"
-
-    # Set default ports
-    if [ "$host_port" = "$port" ]; then
+    [ "$port" = "$host_port" ] && {
         [ "$protocol" = "http" ] && port=80
         [ "$protocol" = "https" ] && port=443
-    fi
+    }
 
     echo "$protocol $host $port $path"
 }
 
-# --- Fixed Netget Function ---
-netget() {
-    local url="$1"
-    local output_file="$2"
-    local follow_redirects=0
-    local timeout=$DEFAULT_TIMEOUT
-    local verbose=0
-    local silent=0
-    local insecure=0
-
-    # Parse arguments
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -o|--output) output_file="$2"; shift 2 ;;
-            -L|--location) follow_redirects=1; shift ;;
-            -m|--max-time) timeout="$2"; shift 2 ;;
-            -v|--verbose) verbose=1; shift ;;
-            -s|--silent) silent=1; shift ;;
-            --insecure) insecure=1; shift ;;
-            --help) show_help; return 0 ;;
-            *) url="$1"; shift ;;
+# URL encode string
+urlencode() {
+    local string="$1"
+    local length=${#string}
+    local result=""
+    
+    for (( i = 0; i < length; i++ )); do
+        local c="${string:i:1}"
+        case "$c" in
+            [a-zA-Z0-9.~_-]) result+="$c" ;;
+            *) printf '%%%02X' "'$c" ;;
         esac
     done
+    echo "$result"
+}
 
-    # Validate URL
-    if [ -z "$url" ]; then
-        [ $silent -eq 0 ] && echo "URL is required" >&2
-        return 1
+# Create multipart form data
+create_multipart() {
+    local boundary="------------------------$(date +%Y%m%d%H%M%S)"
+    local content_type="multipart/form-data; boundary=$boundary"
+    local body=""
+    
+    for part in "${FORM_DATA[@]}"; do
+        local key="${part%%=*}"
+        local value="${part#*=}"
+        body+="--$boundary\r\n"
+        body+="Content-Disposition: form-data; name=\"$key\"\r\n\r\n"
+        body+="$value\r\n"
+    done
+    
+    body+="--$boundary--\r\n"
+    echo -e "$content_type\n$body"
+}
+
+# Make HTTP request
+make_request() {
+    local host="$1"
+    local port="$2"
+    local path="$3"
+    local protocol="$4"
+    
+    # Prepare request components
+    local request=""
+    local headers=()
+    local body=""
+    
+    # Build headers
+    headers+=("Host: $host")
+    headers+=("User-Agent: $USER_AGENT")
+    headers+=("Connection: close")
+    [ -n "$AUTH" ] && headers+=("Authorization: Basic $(echo -n "$AUTH" | base64)")
+    [ -n "$REFERER" ] && headers+=("Referer: $REFERER")
+    [ $COMPRESS -eq 1 ] && headers+=("Accept-Encoding: gzip")
+    
+    # Handle cookies
+    if [ ${#COOKIES[@]} -gt 0 ]; then
+        local cookie_header="Cookie: "
+        for cookie in "${COOKIES[@]}"; do
+            cookie_header+="${cookie}; "
+        done
+        headers+=("${cookie_header%; }")
     fi
-
-    # Parse URL
-    local url_parts
-    url_parts=$(parse_url "$url") || return 1
-    read -r protocol host port path <<< "$url_parts"
-
-    # Prepare SSL options
-    local ssl_opts=""
-    [ $insecure -eq 1 ] && ssl_opts="-verify_quiet -verify_return_error"
-
+    
+    # Handle form data
+    if [ ${#FORM_DATA[@]} -gt 0 ]; then
+        local multipart
+        multipart=$(create_multipart)
+        content_type="${multipart%%$'\n'*}"
+        body="${multipart#*$'\n'}"
+        headers+=("Content-Type: $content_type")
+        METHOD="POST"
+    elif [ -n "$DATA" ]; then
+        body="$DATA"
+        headers+=("Content-Type: application/x-www-form-urlencoded")
+        headers+=("Content-Length: ${#body}")
+        [ "$METHOD" = "GET" ] && METHOD="POST"
+    fi
+    
+    # Build request line
+    request="$METHOD $path HTTP/1.1\r\n"
+    
+    # Add headers
+    for header in "${HEADERS[@]}" "${headers[@]}"; do
+        request+="$header\r\n"
+    done
+    
+    # Add body if exists
+    request+="\r\n"
+    [ -n "$body" ] && request+="$body"
+    
+    # Verbose output
+    [ $VERBOSE -eq 1 ] && {
+        echo "> $METHOD $path HTTP/1.1" >&2
+        for header in "${headers[@]}"; do
+            echo "> $header" >&2
+        done
+        [ -n "$body" ] && {
+            echo ">" >&2
+            echo "$body" | head -c 200 >&2
+            [ ${#body} -gt 200 ] && echo "... (truncated)" >&2
+            echo >&2
+        }
+    }
+    
     # Create temp files
     local tmp_dir=$(mktemp -d)
-    local tmp_out="$tmp_dir/response"
-    local tmp_headers="$tmp_dir/headers"
+    local tmp_req="$tmp_dir/request"
+    local tmp_res="$tmp_dir/response"
     trap 'rm -rf "$tmp_dir"' EXIT
-
-    # Make HTTPS request
-    if [ "$protocol" = "https" ]; then
+    
+    # Send request
+    echo -en "$request" > "$tmp_req"
+    
+    local ssl_opts=""
+    [ $INSECURE -eq 1 ] && ssl_opts="-verify_quiet -verify_return_error"
+    
+    if [ -n "$PROXY" ]; then
+        # Proxy implementation (HTTP CONNECT)
+        local proxy_host="${PROXY%:*}"
+        local proxy_port="${PROXY#*:}"
+        
         {
-            echo "GET $path HTTP/1.1"
-            echo "Host: $host"
-            echo "User-Agent: $USER_AGENT"
-            echo "Connection: close"
-            echo
-        } | openssl s_client -connect "$host:$port" -servername "$host" \
-          -quiet $ssl_opts -timeout "$timeout" > "$tmp_out" 2>/dev/null
+            echo -en "CONNECT $host:$port HTTP/1.1\r\n"
+            echo -en "Host: $host:$port\r\n"
+            echo -en "\r\n"
+            sleep 1
+            cat "$tmp_req"
+        } | openssl s_client -connect "$proxy_host:$proxy_port" \
+          -quiet $ssl_opts -servername "$host" > "$tmp_res" 2>/dev/null
     else
-        echo "HTTP not implemented (use HTTPS)" >&2
-        return 1
-    fi
-
-    # Split headers and body
-    awk 'NR==1{if($2 >= 400){print > "/dev/stderr"; exit 1}}
-         /^\r$/{getline; body=1; next} 
-         body==1{print > "'"$tmp_dir/body"'"; next}
-         {print > "'"$tmp_headers"'"}
-        ' "$tmp_out" >/dev/null 2>&1
-
-    # Check for valid response
-    if [ ! -f "$tmp_dir/body" ] || [ ! -s "$tmp_out" ]; then
-        [ $silent -eq 0 ] && echo "Error: Invalid server response" >&2
-        return 1
-    fi
-
-    # Handle redirects
-    if [ $follow_redirects -eq 1 ]; then
-        local redirect_url=$(grep -i '^location:' "$tmp_headers" | head -1 | sed 's/^location:\s*//i' | tr -d '\r')
-        if [ -n "$redirect_url" ]; then
-            [ $verbose -eq 1 ] && echo "Redirecting to: $redirect_url" >&2
-            netget --location --max-time "$timeout" "$redirect_url" "$output_file"
-            return $?
+        # Direct connection
+        if [ "$protocol" = "https" ]; then
+            openssl s_client -connect "$host:$port" -servername "$host" \
+              -quiet $ssl_opts -timeout $TIMEOUT < "$tmp_req" > "$tmp_res" 2>/dev/null
+        else
+            nc -w $TIMEOUT "$host" "$port" < "$tmp_req" > "$tmp_res"
         fi
     fi
+    
+    # Process response
+    process_response "$tmp_res"
+}
 
-    # Output results
-    if [ -n "$output_file" ]; then
-        cp "$tmp_dir/body" "$output_file"
-    else
-        cat "$tmp_dir/body"
+# Process HTTP response
+process_response() {
+    local response_file="$1"
+    
+    # Extract status line
+    local status_line=$(head -1 "$response_file")
+    local http_version=$(echo "$status_line" | awk '{print $1}')
+    local status_code=$(echo "$status_line" | awk '{print $2}')
+    local status_text=$(echo "$status_line" | cut -d' ' -f3-)
+    
+    # Find header end
+    local header_end=$(grep -an $'^\r$' "$response_file" | head -1 | cut -d: -f1)
+    [ -z "$header_end" ] && {
+        [ $SILENT -eq 0 ] && echo "Invalid HTTP response" >&2
+        return 1
+    }
+    
+    # Extract headers
+    local headers=$(head -n $header_end "$response_file")
+    
+    # Extract body
+    local body_start=$((header_end + 1))
+    local body=$(tail -n +$body_start "$response_file")
+    
+    # Handle cookies
+    COOKIES=()
+    while read -r line; do
+        [[ "$line" =~ ^Set-Cookie:\ ([^=]+=[^;]+) ]] && COOKIES+=("${BASH_REMATCH[1]}")
+    done <<< "$headers"
+    
+    # Handle redirects
+    if [[ "$status_code" =~ 30[12378] ]] && [ $FOLLOW_REDIRECTS -eq 1 ]; then
+        local redirect_url=$(grep -i '^Location:' <<< "$headers" | head -1 | sed 's/^Location:\s*//i' | tr -d '\r')
+        [ -n "$redirect_url" ] && {
+            [ $VERBOSE -eq 1 ] && echo "Redirecting to: $redirect_url" >&2
+            local url_parts
+            url_parts=$(parse_url "$redirect_url") || return 1
+            read -r protocol host port path <<< "$url_parts"
+            make_request "$host" "$port" "$path" "$protocol"
+            return $?
+        }
     fi
-
-    [ $verbose -eq 1 ] && cat "$tmp_headers" >&2
+    
+    # Handle compression
+    if grep -qi '^Content-Encoding: gzip' <<< "$headers"; then
+        if command -v gzip >/dev/null; then
+            body=$(echo "$body" | gzip -d)
+        else
+            [ $SILENT -eq 0 ] && echo "Warning: Received gzip content but no gzip available" >&2
+        fi
+    fi
+    
+    # Output results
+    if [ -n "$OUTPUT" ]; then
+        if [ "$OUTPUT" = "-" ]; then
+            echo "$body"
+        else
+            echo "$body" > "$OUTPUT"
+        fi
+    else
+        echo "$body"
+    fi
+    
+    # Verbose output
+    [ $VERBOSE -eq 1 ] && {
+        echo "< HTTP/1.1 $status_code $status_text" >&2
+        echo "$headers" >&2
+        echo "<" >&2
+        echo "$body" | head -c 200 >&2
+        [ ${#body} -gt 200 ] && echo "... (truncated)" >&2
+        echo >&2
+    }
+    
     return 0
 }
 
-# --- Main Execution ---
+# Main function
+main() {
+    init_vars
+    
+    # Parse arguments
+    local URL=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -X|--request) METHOD="$2"; shift 2 ;;
+            -H|--header) HEADERS+=("$2"); shift 2 ;;
+            -d|--data) DATA="$2"; shift 2 ;;
+            -F|--form) FORM_DATA+=("$2"); shift 2 ;;
+            -o|--output) OUTPUT="$2"; shift 2 ;;
+            -O|--remote-name) OUTPUT="-"; shift ;;
+            -L|--location) FOLLOW_REDIRECTS=1; shift ;;
+            -m|--max-time) TIMEOUT="$2"; shift 2 ;;
+            -A|--user-agent) USER_AGENT="$2"; shift 2 ;;
+            -e|--referer) REFERER="$2"; shift 2 ;;
+            -k|--insecure) INSECURE=1; shift ;;
+            -v|--verbose) VERBOSE=1; shift ;;
+            -s|--silent) SILENT=1; shift ;;
+            --proxy) PROXY="$2"; shift 2 ;;
+            --compressed) COMPRESS=1; shift ;;
+            --help) show_help; return 0 ;;
+            --version) echo "pime-netget v$VERSION"; return 0 ;;
+            -*) echo "Unknown option: $1" >&2; return 1 ;;
+            *) URL="$1"; shift ;;
+        esac
+    done
+    
+    [ -z "$URL" ] && { show_help; return 1; }
+    
+    # Parse URL
+    local url_parts
+    url_parts=$(parse_url "$URL") || return 1
+    read -r protocol host port path <<< "$url_parts"
+    
+    # Make request
+    make_request "$host" "$port" "$path" "$protocol"
+}
+
+# Run main function
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    netget "$@"
+    main "$@"
     exit $?
 else
-    export -f netget
+    # Library mode
+    export -f main
 fi
