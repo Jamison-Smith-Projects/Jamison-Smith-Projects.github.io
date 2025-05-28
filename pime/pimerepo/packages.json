@@ -13,7 +13,7 @@
     "INSTALLERURL": "https://jamisonsmith.is-a.dev/installers/pime-netget-installer",
     "PackageAuthor": "Jamison Smith",
     "Dependencies": [],
-    "InstalledBinary": "netget-pime"
+    "InstalledBinary": "pime-netget"
   },
   "plex-media-server": {
     "INSTALLERURL": "https://jamisonsmith.is-a.dev/installers/plex-server-installer",
