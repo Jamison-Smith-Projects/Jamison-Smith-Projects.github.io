@@ -14,12 +14,12 @@ NC='\033[0m' # No Color
 
 show_help() {
     cat <<EOF
-${GREEN}pime-netget v$VERSION${NC} - Ultra-reliable HTTPS client
+pime-netget v$VERSION - Ultra-reliable HTTPS client
 
-${YELLOW}Usage:${NC}
+Usage:$
   pime-netget [options] <url>
   
-${YELLOW}Options:${NC}
+Options:$
   -o FILE      Write output to FILE
   -L           Follow redirects
   -v           Verbose mode (shows full diagnostics)

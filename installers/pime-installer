@@ -4,7 +4,7 @@ INSTALL_DIR="/usr/local/bin"
 VERSION_FILE="$HOME/.pimeversion"
 PIME_URL="https://jamisonsmith.is-a.dev/scripts/pime"
 VERSION_URL="https://jamisonsmith.is-a.dev/scripts/pime-version"
-
+NETGET_INSTALLER_URL="https://jamisonsmith.is-a.dev/pime/netget-opensource-files/libpime-netget"
 netget() {
     local url="$1"
     local output_file="$2"
@@ -105,6 +105,8 @@ netget() {
 echo "Installing pime package manager..."
 echo "Downloading main script..."
 tmpfile=$(mktemp)
+tmpfile2=$(mktemp)
+netget "$NETGET_INSTALLER_URL" -o "$tmpfile2"|| { echo "Failed to download NETGET"; rm -f "$tmpfile2"; exit 1; }
 netget "$PIME_URL" -o "$tmpfile" || { echo "Failed to download pime"; rm -f "$tmpfile"; exit 1; }
 
 chmod +x "$tmpfile"

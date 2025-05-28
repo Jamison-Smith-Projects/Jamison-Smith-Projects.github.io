@@ -4,7 +4,7 @@
 # --- Configuration ---
 INSTALL_DIR="/usr/local/bin"
 VERSION="1.2"
-REPO_URL="https://jamisonsmith.is-a.dev/scripts/pime-netget"
+REPO_URL="https://jamisonsmith.is-a.dev/scripts/netget-releases/libpime-netget"
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
