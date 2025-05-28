@@ -126,7 +126,7 @@ check_deps
 echo "Installing pime-netget v$VERSION..."
 echo "Downloading from $REPO_URL..."
 
-if ! temp_netget "$REPO_URL" -o "$TEMP_DIR/pime-netget"; then
+if ! tempnetget "$REPO_URL" -o "$TEMP_DIR/pime-netget"; then
     echo "Download failed!" >&2
     exit 1
 fi
