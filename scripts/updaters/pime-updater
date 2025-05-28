@@ -4,33 +4,10 @@
 VERSION_FILE="$HOME/.pimeversion"
 UPDATE_URL="https://jamisonsmith.is-a.dev/scripts/pime"
 VERSION_URL="https://jamisonsmith.is-a.dev/scripts/pime-version"
-
-# Use pime-netget if available, otherwise fallback
-if command -v pime-netget >/dev/null 2>&1; then
-    netget() { pime-netget "$@"; }
-else
-    # Fallback netget implementation
-    netget() {
-        url="$1"
-        host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
-        path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
-        path=${path:-/}
-
-        {
-            echo "GET $path HTTP/1.1"
-            echo "Host: $host"
-            echo "User-Agent: pime-updater/1.2"
-            echo "Connection: close"
-            echo
-        } | openssl s_client -quiet -connect "$host:443" 2>/dev/null | \
-          awk 'NR==1{if($2 >= 400) exit 1;}/^\r$/{body=1;next}body'
-    }
-fi
-
 # --- Main Update Process ---
 echo "Checking for updates..."
 CURRENT_VERSION=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
-NEW_VERSION=$(netget "$VERSION_URL" || { echo "Failed to check version"; exit 1; })
+NEW_VERSION=$(pime-netget "$VERSION_URL" || { echo "Failed to check version"; exit 1; })
 
 if [ "$NEW_VERSION" = "$CURRENT_VERSION" ]; then
     echo "Already up to date (version $CURRENT_VERSION)"
@@ -41,7 +18,7 @@ echo "Updating from $CURRENT_VERSION to $NEW_VERSION"
 echo "Downloading new version..."
 
 TEMP_FILE=$(mktemp)
-if ! netget "$UPDATE_URL" > "$TEMP_FILE"; then
+if ! pime-netget "$UPDATE_URL" > "$TEMP_FILE"; then
     echo "Download failed!" >&2
     rm -f "$TEMP_FILE"
     exit 1
