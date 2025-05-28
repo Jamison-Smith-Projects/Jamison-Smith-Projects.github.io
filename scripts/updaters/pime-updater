@@ -18,7 +18,7 @@ echo "Updating from $CURRENT_VERSION to $NEW_VERSION"
 echo "Downloading new version..."
 
 TEMP_FILE=$(mktemp)
-if ! pime-netget "$UPDATE_URL" > "$TEMP_FILE"; then
+if ! pime-netget "$UPDATE_URL" -o "$TEMP_FILE"; then
     echo "Download failed!" >&2
     rm -f "$TEMP_FILE"
     exit 1
