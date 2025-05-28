@@ -135,6 +135,10 @@ uninstall_package() {
 
 add_repo() {
     url="$1"
+    if [ "$url" = "default" ]; then
+        url="https://jamisonsmith.is-a.dev/pime/pimerepo/packages.json"
+    fi
+
     [ -f "$REPO_LIST_FILE" ] || echo '[]' > "$REPO_LIST_FILE"
     if jq -e --arg url "$url" '.[] | select(. == $url)' "$REPO_LIST_FILE" >/dev/null; then
         echo "Repository already added."

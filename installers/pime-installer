@@ -118,7 +118,7 @@ fi
 
 echo "Downloading version info..."
 netget "$VERSION_URL" > "$VERSION_FILE" || echo "Warning: Could not save version info"
-pime add-repo https://jamisonsmith.is-a.dev/pime/pime-repo/packages.json
+pime add-repo https://jamisonsmith.is-a.dev/pime/pimerepo/packages.json
 pime update
 clear
 echo "Installation complete!"
