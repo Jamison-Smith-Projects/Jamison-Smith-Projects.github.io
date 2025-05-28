@@ -1,13 +1,13 @@
 #!/bin/bash
-# pime-netget v2.1 - Robust HTTPS implementation
+# pime-netget v2.2 - Enhanced connection diagnostics
 
-VERSION="2.1"
+VERSION="2.2"
 USER_AGENT="pime-netget/$VERSION"
 DEFAULT_TIMEOUT=30
 
 show_help() {
     cat <<EOF
-pime-netget v$VERSION - A reliable HTTPS client
+pime-netget v$VERSION - Robust HTTPS client with diagnostics
 
 Usage:
   pime-netget [options] <url>
@@ -15,19 +15,71 @@ Usage:
 Options:
   -o FILE      Write output to FILE
   -L           Follow redirects
-  -v           Verbose mode
+  -v           Verbose mode (shows connection details)
   -k           Skip SSL verification
+  --test       Test connection without downloading
   --help       Show this help
 EOF
 }
 
-# Enhanced URL parser with validation
-parse_url() {
-    local url="$1"
+diagnose_connection() {
+    local host="$1"
+    local port="$2"
     
-    # Ensure URL starts with https://
+    echo "Running connection diagnostics for $host:$port..." >&2
+    
+    # 1. Check DNS resolution
+    if ! host "$host" &>/dev/null; then
+        echo "DNS Error: Could not resolve $host" >&2
+        return 1
+    fi
+    
+    # 2. Test basic TCP connection
+    if ! timeout 2 bash -c "cat < /dev/null > /dev/tcp/$host/$port" 2>/dev/null; then
+        echo "Connection Error: Cannot reach $host:$port (TCP failed)" >&2
+        return 1
+    fi
+    
+    # 3. Test SSL handshake
+    local ssl_test=$(echo | openssl s_client -connect "$host:$port" -servername "$host" 2>&1)
+    if [[ "$ssl_test" == *"Certificate chain"* ]]; then
+        echo "SSL Info: Valid certificate found" >&2
+    elif [[ "$ssl_test" == *"verify error"* ]]; then
+        echo "SSL Warning: Certificate verification failed" >&2
+    else
+        echo "SSL Error: Handshake failed" >&2
+        return 1
+    fi
+    
+    return 0
+}
+
+netget() {
+    local url="$1"
+    local output_file="$2"
+    local follow_redirects=0
+    local verbose=0
+    local insecure=0
+    local test_only=0
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o) output_file="$2"; shift 2 ;;
+            -L) follow_redirects=1; shift ;;
+            -v) verbose=1; shift ;;
+            -k) insecure=1; shift ;;
+            --test) test_only=1; shift ;;
+            --help) show_help; return 0 ;;
+            *) url="$1"; shift ;;
+        esac
+    done
+
+    [ -z "$url" ] && { show_help; return 1; }
+
+    # Parse URL
     if [[ ! "$url" =~ ^https:// ]]; then
-        echo "Error: Only HTTPS URLs are supported" >&2
+        echo "Error: Only HTTPS URLs are supported (must start with https://)" >&2
         return 1
     fi
 
@@ -38,50 +90,14 @@ parse_url() {
     local host="${host_port%:*}"
     local port="${host_port##*:}"
     [ "$port" = "$host_port" ] && port=443
-    
-    # Validate host
-    if [[ ! "$host" =~ ^([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(\.([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))*$ ]]; then
-        echo "Error: Invalid hostname '$host'" >&2
-        return 1
-    fi
-    
-    # Validate port
-    if (( port < 1 || port > 65535 )); then
-        echo "Error: Invalid port number '$port'" >&2
-        return 1
-    fi
-    
-    echo "$host $port $path"
-}
 
-# Main request function with proper error handling
-netget() {
-    local url="$1"
-    local output_file="$2"
-    local follow_redirects=0
-    local verbose=0
-    local insecure=0
-    
-    # Parse arguments
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            -o) output_file="$2"; shift 2 ;;
-            -L) follow_redirects=1; shift ;;
-            -v) verbose=1; shift ;;
-            -k) insecure=1; shift ;;
-            --help) show_help; return 0 ;;
-            *) url="$1"; shift ;;
-        esac
-    done
-
-    [ -z "$url" ] && { show_help; return 1; }
-
-    # Parse URL with validation
-    local url_parts
-    if ! url_parts=$(parse_url "$url"); then
-        return 1
+    # Run diagnostics
+    if [ $verbose -eq 1 ] || [ $test_only -eq 1 ]; then
+        if ! diagnose_connection "$host" "$port"; then
+            return 1
+        fi
+        [ $test_only -eq 1 ] && return 0
     fi
-    read -r host port path <<< "$url_parts"
 
     # Prepare SSL options
     local ssl_opts="-quiet"
@@ -90,88 +106,47 @@ netget() {
     # Create temporary files
     local tmp_dir=$(mktemp -d)
     local response_file="$tmp_dir/response"
-    local headers_file="$tmp_dir/headers"
+    local error_file="$tmp_dir/error"
     trap 'rm -rf "$tmp_dir"' EXIT
 
-    # Build HTTP request
+    # Make the request
     {
         printf "GET %s HTTP/1.1\r\n" "$path"
         printf "Host: %s\r\n" "$host"
         printf "User-Agent: %s\r\n" "$USER_AGENT"
-        printf "Accept: */*\r\n"
         printf "Connection: close\r\n"
         printf "\r\n"
     } | openssl s_client -connect "$host:$port" -servername "$host" \
-      $ssl_opts -timeout $DEFAULT_TIMEOUT > "$response_file" 2>"$tmp_dir/error"
+      $ssl_opts -timeout $DEFAULT_TIMEOUT > "$response_file" 2>"$error_file"
 
     # Check for connection errors
     if [ $? -ne 0 ]; then
-        echo "Error: Failed to connect to $host:$port" >&2
-        [ $verbose -eq 1 ] && cat "$tmp_dir/error" >&2
+        echo "Connection Failed: $host:$port" >&2
+        echo "Possible reasons:" >&2
+        grep -o "connect:.*\|SSL3_.*\|certificate.*" "$error_file" | sort -u >&2
         return 1
     fi
 
     # Check if response is empty
     if [ ! -s "$response_file" ]; then
-        echo "Error: Empty response from server" >&2
+        echo "Error: Server returned empty response" >&2
         return 1
     fi
 
-    # Extract HTTP status line
-    local status_line=$(head -1 "$response_file")
-    if [[ ! "$status_line" =~ ^HTTP/1\.[01]\ [0-9]{3} ]]; then
-        echo "Error: Invalid HTTP response (bad status line)" >&2
-        [ $verbose -eq 1 ] && head -c 200 "$response_file" >&2
-        return 1
-    fi
-
-    # Find header/body separation (empty line)
+    # Process response
     local header_end=$(grep -an $'^\r$' "$response_file" | head -1 | cut -d: -f1)
     if [ -z "$header_end" ]; then
-        echo "Error: Invalid HTTP headers (no header/body separation)" >&2
+        echo "Error: Invalid HTTP response format" >&2
         [ $verbose -eq 1 ] && head -c 200 "$response_file" >&2
         return 1
     fi
 
-    # Extract headers
-    head -n "$header_end" "$response_file" > "$headers_file"
-
-    # Extract HTTP status code
-    local http_status=$(awk '{print $2}' <<< "$status_line")
-
-    # Handle redirects
-    if [[ "$http_status" =~ 30[12378] ]] && [ $follow_redirects -eq 1 ]; then
-        local redirect_url=$(grep -i '^location:' "$headers_file" | head -1 | sed 's/^location:\s*//i' | tr -d '\r')
-        if [ -n "$redirect_url" ]; then
-            [ $verbose -eq 1 ] && echo "Following redirect to: $redirect_url" >&2
-            netget -L "$redirect_url" "$@"
-            return $?
-        fi
-    fi
-
-    # Handle error status codes
-    if [ "$http_status" -ge 400 ]; then
-        echo "HTTP Error $http_status" >&2
-        [ $verbose -eq 1 ] && cat "$headers_file" >&2
-        return 1
-    fi
-
-    # Extract body (starting after header_end)
-    local body_start=$((header_end + 1))
-    
     # Output results
     if [ -n "$output_file" ]; then
-        tail -n +$body_start "$response_file" > "$output_file"
+        tail -n +$((header_end + 1)) "$response_file" > "$output_file"
     else
-        tail -n +$body_start "$response_file"
+        tail -n +$((header_end + 1)) "$response_file"
     fi
-
-    # Verbose output
-    [ $verbose -eq 1 ] && {
-        echo "HTTP Response:" >&2
-        cat "$headers_file" >&2
-        echo >&2
-    }
 
     return 0
 }

@@ -9,52 +9,101 @@ VERSION_FILE="$HOME/.pimeversion"
 # --- Ensure directories exist ---
 mkdir -p "$HOME/.pime"
 
-# --- Custom netget function ---
 netget() {
-    url="$1"
-    host=$(echo "$url" | sed -E 's_https?://([^/]+).*_\1_')
-    path=$(echo "$url" | sed -E 's_https?://[^/]+(/.*)?_\1_')
-    path=${path:-/}
+    local url="$1"
+    local output_file="$2"
+    local follow_redirects=0
+    local verbose=0
+    local insecure=0
+    local test_only=0
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o) output_file="$2"; shift 2 ;;
+            -L) follow_redirects=1; shift ;;
+            -v) verbose=1; shift ;;
+            -k) insecure=1; shift ;;
+            --test) test_only=1; shift ;;
+            --help) show_help; return 0 ;;
+            *) url="$1"; shift ;;
+        esac
+    done
 
-    tmp_response=$(mktemp)
-    tmp_body=$(mktemp)
+    [ -z "$url" ] && { show_help; return 1; }
 
-    {
-        echo "GET $path HTTP/1.1"
-        echo "Host: $host"
-        echo "User-Agent: pimenetget/1.0"
-        echo "Connection: close"
-        echo
-    } | openssl s_client -quiet -connect "$host:443" 2>/dev/null > "$tmp_response"
-
-    header_end=$(grep -n -m 1 '^$' "$tmp_response" | cut -d: -f1)
-    [ -z "$header_end" ] && echo "Error: Invalid HTTP response." >&2 && rm -f "$tmp_response" "$tmp_body" && return 1
-
-    content_length=$(sed -n 's/^Content-Length: //Ip' "$tmp_response" | tr -d '\r')
-    body_offset=$(awk -v n="$header_end" 'NR <= n { bytes += length($0) + 1 } END { print bytes }' "$tmp_response")
-
-    if [ -n "$content_length" ]; then
-        echo "Downloading ($content_length bytes):" >&2
-    else
-        echo "Downloading (unknown size):" >&2
+    # Parse URL
+    if [[ ! "$url" =~ ^https:// ]]; then
+        echo "Error: Only HTTPS URLs are supported (must start with https://)" >&2
+        return 1
     fi
 
-    dd if="$tmp_response" bs=1 skip="$body_offset" status=none | {
-        count=0
-        bar_size=50
-        while IFS= read -r -n1 c; do
-            printf "%s" "$c"
-            count=$((count + 1))
-            if [ $((count % 1024)) -eq 0 ] && [ -n "$content_length" ]; then
-                progress=$((count * bar_size / content_length))
-                bar=$(printf "%-${bar_size}s" "" | tr ' ' '=' | cut -c1-$progress)
-                printf "\r[%s>%*s] %3d%%" "$bar" $((bar_size - progress)) "" $((count * 100 / content_length)) >&2
-            fi
-        done
-        echo >&2
-    }
+    local host_port="${url#https://}"
+    host_port="${host_port%%[/?]*}"
+    local path="/${url#https://$host_port/}"
+    
+    local host="${host_port%:*}"
+    local port="${host_port##*:}"
+    [ "$port" = "$host_port" ] && port=443
 
-    rm -f "$tmp_response" "$tmp_body"
+    # Run diagnostics
+    if [ $verbose -eq 1 ] || [ $test_only -eq 1 ]; then
+        if ! diagnose_connection "$host" "$port"; then
+            return 1
+        fi
+        [ $test_only -eq 1 ] && return 0
+    fi
+
+    # Prepare SSL options
+    local ssl_opts="-quiet"
+    [ $insecure -eq 1 ] && ssl_opts+=" -verify_quiet -verify_return_error"
+
+    # Create temporary files
+    local tmp_dir=$(mktemp -d)
+    local response_file="$tmp_dir/response"
+    local error_file="$tmp_dir/error"
+    trap 'rm -rf "$tmp_dir"' EXIT
+
+    # Make the request
+    {
+        printf "GET %s HTTP/1.1\r\n" "$path"
+        printf "Host: %s\r\n" "$host"
+        printf "User-Agent: %s\r\n" "$USER_AGENT"
+        printf "Connection: close\r\n"
+        printf "\r\n"
+    } | openssl s_client -connect "$host:$port" -servername "$host" \
+      $ssl_opts -timeout $DEFAULT_TIMEOUT > "$response_file" 2>"$error_file"
+
+    # Check for connection errors
+    if [ $? -ne 0 ]; then
+        echo "Connection Failed: $host:$port" >&2
+        echo "Possible reasons:" >&2
+        grep -o "connect:.*\|SSL3_.*\|certificate.*" "$error_file" | sort -u >&2
+        return 1
+    fi
+
+    # Check if response is empty
+    if [ ! -s "$response_file" ]; then
+        echo "Error: Server returned empty response" >&2
+        return 1
+    fi
+
+    # Process response
+    local header_end=$(grep -an $'^\r$' "$response_file" | head -1 | cut -d: -f1)
+    if [ -z "$header_end" ]; then
+        echo "Error: Invalid HTTP response format" >&2
+        [ $verbose -eq 1 ] && head -c 200 "$response_file" >&2
+        return 1
+    fi
+
+    # Output results
+    if [ -n "$output_file" ]; then
+        tail -n +$((header_end + 1)) "$response_file" > "$output_file"
+    else
+        tail -n +$((header_end + 1)) "$response_file"
+    fi
+
+    return 0
 }
 
 # --- Rest of the script remains the same ---
